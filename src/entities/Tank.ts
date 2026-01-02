@@ -63,7 +63,7 @@ export class Tank extends Entity {
     aiAction: 'idle' | 'moveBase' | 'rotateLeft' | 'rotateRight' | 'forward' | 'backward' = 'idle';
     aiShootTimer: number = 0;
 
-    update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[]) {
+    update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[], targets?: Tank[]) {
         if (this.shootTimer > 0) {
             this.shootTimer -= dt;
         }
@@ -120,29 +120,78 @@ export class Tank extends Entity {
         }
         // AI Control
         else if (level && bullets) {
-            this.updateAI(dt, level, bullets);
+            this.updateAI(dt, level, bullets, targets);
         }
     }
 
-    updateAI(dt: number, level: Level, bullets: Bullet[]) {
+    updateAI(dt: number, level: Level, bullets: Bullet[], targets?: Tank[]) {
         this.aiTimer -= dt;
+
+        // Targeting Logic (Battle Royale)
+        let target: Tank | null = null;
+        if (targets) {
+            let minDist = 600; // Search radius (Increased)
+            for (const t of targets) {
+                if (t === this) continue; // Don't target self
+                if (t.hp <= 0) continue; // Don't target dead
+
+                const dist = Math.sqrt((t.x - this.x) ** 2 + (t.y - this.y) ** 2);
+                if (dist < minDist) {
+                    minDist = dist;
+                    target = t;
+                }
+            }
+        }
+
         if (this.aiTimer <= 0) {
             // Pick new action
             this.aiTimer = 1 + Math.random() * 2; // 1-3 seconds
-            const rand = Math.random();
-            if (rand < 0.2) this.aiAction = 'idle';
-            else if (rand < 0.4) this.aiAction = 'rotateLeft';
-            else if (rand < 0.6) this.aiAction = 'rotateRight';
-            else if (rand < 0.8) this.aiAction = 'forward';
-            else this.aiAction = 'backward';
+
+            if (target) {
+                // Tactical Move if target found
+                const rand = Math.random();
+                if (rand < 0.6) this.aiAction = 'forward'; // Chase
+                else if (rand < 0.8) this.aiAction = 'rotateLeft';
+                else this.aiAction = 'rotateRight';
+            } else {
+                // Random Wander
+                const rand = Math.random();
+                if (rand < 0.2) this.aiAction = 'idle';
+                else if (rand < 0.4) this.aiAction = 'rotateLeft';
+                else if (rand < 0.6) this.aiAction = 'rotateRight';
+                else if (rand < 0.8) this.aiAction = 'forward';
+                else this.aiAction = 'backward';
+            }
         }
 
-        // Execute Move/Rotate
-        if (this.aiAction === 'rotateLeft') {
-            this.rotation -= this.rotationSpeed * dt;
-        } else if (this.aiAction === 'rotateRight') {
-            this.rotation += this.rotationSpeed * dt;
-        } else if (this.aiAction === 'forward') {
+        // Rotate towards target if exists
+        if (target) {
+            const targetRotation = Math.atan2(target.y - this.y, target.x - this.x);
+
+            // Smooth rotation logic
+            let current = this.rotation;
+            while (current > Math.PI) current -= Math.PI * 2;
+            while (current <= -Math.PI) current += Math.PI * 2;
+
+            let diff = targetRotation - current;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff <= -Math.PI) diff += Math.PI * 2;
+
+            // Override random rotation
+            if (Math.abs(diff) > 0.1) {
+                this.rotation += Math.sign(diff) * this.rotationSpeed * dt;
+            }
+        } else {
+            // Manual Rotation
+            if (this.aiAction === 'rotateLeft') {
+                this.rotation -= this.rotationSpeed * dt;
+            } else if (this.aiAction === 'rotateRight') {
+                this.rotation += this.rotationSpeed * dt;
+            }
+        }
+
+        // Execute Move
+        if (this.aiAction === 'forward') {
             const dx = Math.cos(this.rotation) * this.speed * dt;
             const dy = Math.sin(this.rotation) * this.speed * dt;
             this.move(dx, dy, level);
@@ -155,8 +204,23 @@ export class Tank extends Entity {
         // Shooting
         this.aiShootTimer -= dt;
         if (this.aiShootTimer <= 0) {
-            this.shoot(bullets);
-            this.aiShootTimer = 2 + Math.random() * 3; // 2-5 seconds
+            // Only shoot if roughly facing target or random chance
+            if (target) {
+                const targetRotation = Math.atan2(target.y - this.y, target.x - this.x);
+                let diff = targetRotation - this.rotation;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff <= -Math.PI) diff += Math.PI * 2;
+
+                if (Math.abs(diff) < 0.5) {
+                    this.shoot(bullets);
+                    this.aiShootTimer = this.fireRate * (1 + Math.random()); // Fire rate variance
+                } else {
+                    this.aiShootTimer = 0.2; // Check again soon
+                }
+            } else {
+                this.shoot(bullets);
+                this.aiShootTimer = 2 + Math.random() * 3;
+            }
         }
     }
 
@@ -229,24 +293,44 @@ export class Tank extends Entity {
 
         // 1. Spoilers (Dasher) - drawn below body
         if (this.role === 'dasher') {
-            ctx.fillStyle = '#a0f'; // Match body
-            ctx.fillRect(-this.width / 2 - 5, -this.height / 2, 5, this.height); // Rear wing
-            ctx.fillStyle = '#508';
-            ctx.fillRect(-this.width / 2 - 2, -this.height / 2 + 5, 2, this.height - 10); // Struts
+            ctx.fillStyle = '#d0f';
+            ctx.fillRect(-this.width / 2 - 8, -this.height / 2, 8, this.height); // Rear wing extended
+            ctx.fillStyle = '#90d';
+            ctx.fillRect(-this.width / 2 - 4, -this.height / 2 + 5, 4, this.height - 10); // Struts
         }
 
-        // Tracks
-        ctx.fillStyle = '#333';
-        ctx.fillRect(-this.width / 2 - 2, -this.height / 2 + 2, 8, this.height - 4); // Left Track
-        ctx.fillRect(this.width / 2 - 6, -this.height / 2 + 2, 8, this.height - 4);  // Right Track
+        // Tracks with Animation
+        // Animated using x position or timer? Use global time would be best, but we don't pass it easily.
+        // We'll use a simple alternator based on world position to simulate tread movement.
+        const treadPhase = Math.floor((this.x + this.y) / 5) % 2 === 0;
 
-        // Body Shadow
-        ctx.shadowColor = 'rgba(0,0,0,0.5)';
-        ctx.shadowBlur = 5;
+        ctx.fillStyle = '#222'; // Track Base
+        ctx.fillRect(-this.width / 2 - 4, -this.height / 2 + 2, 8, this.height - 4); // Left Track
+        ctx.fillRect(this.width / 2 - 4, -this.height / 2 + 2, 8, this.height - 4);  // Right Track
 
-        // Body
-        ctx.fillStyle = this.color;
-        if (this.role === 'heavy') ctx.fillStyle = '#800'; // Enforce dark red
+        // Tread Links
+        ctx.fillStyle = treadPhase ? '#444' : '#111';
+        for (let i = 0; i < 4; i++) {
+            ctx.fillRect(-this.width / 2 - 4, -this.height / 2 + 2 + i * 8 + (treadPhase ? 0 : 4), 8, 4);
+            ctx.fillRect(this.width / 2 - 4, -this.height / 2 + 2 + i * 8 + (treadPhase ? 0 : 4), 8, 4);
+        }
+
+
+        // Body Shadow / Glow
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 10; // Glow effect
+
+        // Metallic Body Gradient
+        const grad = ctx.createLinearGradient(-this.width / 2, -this.height / 2, this.width / 2, this.height / 2);
+
+        // Adjust colors for metallic feel
+        // Simple lightening/darkening
+        grad.addColorStop(0, this.color);
+        grad.addColorStop(0.5, '#fff'); // Shine
+        grad.addColorStop(1, this.color);
+
+        ctx.fillStyle = grad;
+        if (this.role === 'heavy') ctx.fillStyle = '#600'; // Dark matte red for heavy
 
         ctx.fillRect(-this.width / 2 + 4, -this.height / 2 + 4, this.width - 8, this.height - 8);
         ctx.shadowBlur = 0; // Reset shadow
@@ -254,20 +338,20 @@ export class Tank extends Entity {
         // Armor Plating (Armored)
         if (this.role === 'armored') {
             ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = 3;
             ctx.strokeRect(-this.width / 2 + 2, -this.height / 2 + 2, this.width - 4, this.height - 4);
             // Rivets
-            ctx.fillStyle = '#555';
-            ctx.fillRect(-10, -10, 2, 2);
-            ctx.fillRect(10, -10, 2, 2);
-            ctx.fillRect(-10, 10, 2, 2);
-            ctx.fillRect(10, 10, 2, 2);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-12, -12, 4, 4);
+            ctx.fillRect(8, -12, 4, 4);
+            ctx.fillRect(-12, 8, 4, 4);
+            ctx.fillRect(8, 8, 4, 4);
         }
 
         // -- Turret Types --
 
-        ctx.fillStyle = '#ccc';
-        ctx.strokeStyle = '#555';
+        ctx.fillStyle = '#bbb'; // Metallic turret
+        ctx.strokeStyle = '#333';
         ctx.lineWidth = 1;
 
         if (this.role === 'sniper') {
@@ -276,58 +360,66 @@ export class Tank extends Entity {
             ctx.strokeRect(0, -3, 45, 6);
             // Scope
             ctx.fillStyle = '#000';
-            ctx.fillRect(10, -6, 10, 3);
+            ctx.fillRect(10, -6, 12, 12); // Bigger scope box
+            ctx.fillStyle = '#f00'; // Lens
+            ctx.beginPath(); ctx.arc(16, 0, 3, 0, Math.PI * 2); ctx.fill();
         } else if (this.role === 'shotgun') {
             // Triple Barrel
             // Center
-            ctx.fillStyle = '#ccc';
+            ctx.fillStyle = '#888';
             ctx.fillRect(0, -4, 25, 8);
             ctx.strokeRect(0, -4, 25, 8);
             // Sides
             ctx.save();
-            ctx.rotate(0.2);
+            ctx.rotate(0.25);
             ctx.fillRect(0, -3, 22, 6);
             ctx.strokeRect(0, -3, 22, 6);
             ctx.restore();
             ctx.save();
-            ctx.rotate(-0.2);
+            ctx.rotate(-0.25);
             ctx.fillRect(0, -3, 22, 6);
             ctx.strokeRect(0, -3, 22, 6);
             ctx.restore();
         } else if (this.role === 'machinegun') {
-            // Gatling / Thick Barrel
-            ctx.fillStyle = '#888';
-            ctx.fillRect(0, -8, 26, 16);
-            ctx.strokeRect(0, -8, 26, 16);
-            // Multiple holes hint
-            ctx.fillStyle = '#000';
-            ctx.fillRect(26, -6, 2, 4);
-            ctx.fillRect(26, 2, 2, 4);
+            // Gatling
+            ctx.fillStyle = '#666';
+            ctx.fillRect(0, -8, 28, 16);
+            ctx.strokeRect(0, -8, 28, 16);
+            // Barrels
+            ctx.fillStyle = '#222';
+            ctx.fillRect(28, -7, 4, 4);
+            ctx.fillRect(28, -2, 4, 4);
+            ctx.fillRect(28, 3, 4, 4);
         } else {
             // Standard
-            ctx.fillStyle = '#ccc';
-            ctx.fillRect(0, -6, 28, 12);
-            ctx.strokeRect(0, -6, 28, 12);
+            ctx.fillStyle = '#999';
+            ctx.fillRect(0, -6, 30, 12);
+            ctx.strokeRect(0, -6, 30, 12);
+            // Muzzle detail
+            ctx.fillStyle = '#222';
+            ctx.fillRect(28, -5, 4, 10);
         }
 
         // Turret Base (Round)
         ctx.beginPath();
-        ctx.arc(0, 0, 10, 0, Math.PI * 2);
-        ctx.fillStyle = this.isPlayer ? '#6d6' : this.role === 'heavy' ? '#a44' : '#e66';
-        if (this.role === 'armored') ctx.fillStyle = '#999';
+        ctx.arc(0, 0, 12, 0, Math.PI * 2);
+        ctx.fillStyle = this.isPlayer ? '#afa' : (this.role === 'heavy' ? '#a55' : '#ccc');
+        if (this.role === 'armored') ctx.fillStyle = '#eee';
         ctx.fill();
         ctx.stroke();
 
         // Hatch
         ctx.beginPath();
-        ctx.arc(0, 0, 5, 0, Math.PI * 2);
-        ctx.fillStyle = '#333';
+        ctx.arc(0, 0, 6, 0, Math.PI * 2);
+        ctx.fillStyle = '#444';
         ctx.fill();
 
         // Damage Smoke / Overlay if hurt
         if (this.hp < this.maxHp) {
             ctx.fillStyle = `rgba(0, 0, 0, ${0.5 * (1 - this.hp / this.maxHp)})`;
             ctx.fillRect(-15, -15, 30, 30);
+
+            // Smoke particles could be here, but simpler to just darken for now
         }
 
         ctx.restore();

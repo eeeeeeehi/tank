@@ -13,6 +13,10 @@ export class Bullet extends Entity {
     color: string;
     damage: number;
 
+    // Trail
+    trail: { x: number, y: number }[] = [];
+    maxTrailLength: number = 5;
+
     constructor(x: number, y: number, angle: number, owner: Entity, color: string, speed: number = 200, damage: number = 1) {
         super(x, y);
         this.owner = owner;
@@ -24,6 +28,12 @@ export class Bullet extends Entity {
 
     update(dt: number, level: Level): void {
         if (!this.active) return;
+
+        // Add to trail in front of movement to look connected or behind? Behind.
+        this.trail.push({ x: this.x, y: this.y });
+        if (this.trail.length > this.maxTrailLength) {
+            this.trail.shift();
+        }
 
         this.x += this.velocity.x * dt;
         this.y += this.velocity.y * dt;
@@ -66,6 +76,22 @@ export class Bullet extends Entity {
 
     draw(ctx: CanvasRenderingContext2D): void {
         if (!this.active) return;
+
+        // Draw Trail
+        if (this.trail.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(this.trail[0].x, this.trail[0].y);
+            for (let i = 1; i < this.trail.length; i++) {
+                ctx.lineTo(this.trail[i].x, this.trail[i].y);
+            }
+            ctx.lineTo(this.x, this.y); // Connect to current head
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth = this.radius;
+            ctx.globalAlpha = 0.5; // Transparent trail
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+        }
+
         ctx.beginPath();
         ctx.fillStyle = this.color;
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
