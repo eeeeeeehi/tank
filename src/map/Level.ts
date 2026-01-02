@@ -4,20 +4,20 @@ import type { Rect } from '../utils/MathUtils';
 export class Level {
     walls: Rect[] = [];
 
-    constructor(layoutIndex: number = 0) {
+    constructor(layoutIndex: number = 0, width: number = 800, height: number = 600) {
         // Defines levels
         // In a real app, maybe load JSON. Here, hardcode arrays.
-        this.loadLevel(layoutIndex);
+        this.loadLevel(layoutIndex, width, height);
     }
 
-    loadLevel(index: number) {
+    loadLevel(index: number, w: number, h: number) {
         this.walls = [];
 
         // Bounds
-        this.walls.push({ x: 0, y: 0, w: 800, h: 20 });
-        this.walls.push({ x: 0, y: 580, w: 800, h: 20 });
-        this.walls.push({ x: 0, y: 0, w: 20, h: 600 });
-        this.walls.push({ x: 780, y: 0, w: 20, h: 600 });
+        this.walls.push({ x: 0, y: 0, w: w, h: 20 }); // Top
+        this.walls.push({ x: 0, y: h - 20, w: w, h: 20 }); // Bottom
+        this.walls.push({ x: 0, y: 0, w: 20, h: h }); // Left
+        this.walls.push({ x: w - 20, y: 0, w: 20, h: h }); // Right
 
         if (index === -1) {
             // Battle Royale: OPEN ARENA

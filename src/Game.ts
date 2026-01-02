@@ -22,11 +22,13 @@ export class Game {
     gameState: 'start' | 'playing' | 'win' | 'lose' | 'victory' = 'start';
     gameMode: 'stage' | 'battleroyale' = 'stage';
     currentLevelIdx: number = 0;
-    playerLives: number = 5;
+    // playerLives removed in favor of this.player.hp
     // Score removed as per request
 
-    // Ranking (Stores Stage Reached)
-    highScores: number[] = []; // Stores stage numbers
+    // Ranking (Stores Stage Reached & Date)
+    highScores: { stage: number, date: number }[] = [];
+    lastRank: number = -1;
+    currentScoreDate: number = 0; // To identify current run
     soundManager: SoundManager;
 
     // Screen Shake
@@ -36,11 +38,13 @@ export class Game {
 
     // Player Indicator
     playerIndicatorTimer: number = 0;
+    countdownTimer: number = 0;
+    helpUI: HTMLElement | null = null;
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d')!;
-        this.input = new Input();
+        this.input = new Input(this.canvas);
 
         this.soundManager = new SoundManager();
         this.loadRanking();
@@ -49,42 +53,79 @@ export class Game {
         this.player = new Tank(100, 300, true);
         this.initLevel(); // Initial setup
         this.updateHUD(); // Initial HUD
+        this.initHelpUI();
     }
 
     loadRanking() {
         const saved = localStorage.getItem('tank_ranking_stage');
         if (saved) {
-            this.highScores = JSON.parse(saved);
+            try {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    if (typeof parsed[0] === 'number') {
+                        // Migrate legacy number[]
+                        this.highScores = parsed.map((s: number) => ({ stage: s, date: 0 }));
+                    } else {
+                        this.highScores = parsed;
+                    }
+                } else {
+                    this.highScores = [];
+                }
+            } catch (e) {
+                this.highScores = [];
+            }
         } else {
-            this.highScores = []; // Start empty (User Request)
+            this.highScores = [];
         }
     }
 
     saveRanking() {
-        if (this.gameMode === 'battleroyale') return; // No saving for BR yet
+        if (this.gameMode === 'battleroyale') return;
 
         const stage = this.currentLevelIdx + 1;
-        this.highScores.push(stage);
-        this.highScores.sort((a, b) => b - a);
-        this.highScores = this.highScores.slice(0, 5); // Keep top 5
+        this.currentScoreDate = Date.now();
+
+        this.highScores.push({ stage, date: this.currentScoreDate });
+
+        // Sort: High Stage first, then Newest Date first
+        this.highScores.sort((a, b) => {
+            if (b.stage !== a.stage) return b.stage - a.stage;
+            return b.date - a.date;
+        });
+
+        // Find My Rank (0-indexed)
+        this.lastRank = this.highScores.findIndex(s => s.date === this.currentScoreDate && s.stage === stage);
+
+        // Keep all scores for "Your Rank is X" logic? 
+        // Or trimming? User implies showing rank even if low.
+        // Let's keep Top 100 to prevent infinite growth, effectively "Not Ranked" if < 100.
+        if (this.highScores.length > 100) {
+            this.highScores = this.highScores.slice(0, 100);
+        }
+
         localStorage.setItem('tank_ranking_stage', JSON.stringify(this.highScores));
     }
 
     // Called when moving to next level
     initLevel() {
+        this.canvas.width = 800;
+        this.canvas.height = 600;
+
         this.bullets = [];
         this.particles = [];
         this.shakeTime = 0;
+        this.shakeTime = 0;
         this.playerIndicatorTimer = 3.0; // Show "YOU" for 3 seconds
+        this.inputBlockTimer = 0.5; // Prevent accidental shots from previous screen
 
         // Load Level Layout
-        this.level = new Level(this.currentLevelIdx);
+        this.level = new Level(this.currentLevelIdx, 800, 600);
 
         // Keep Player
         this.player.x = 100;
         this.player.y = 300;
         this.player.rotation = 0;
-        this.player.hp = this.player.maxHp; // Heal? No, only on new level if Stage mode.
+        // Don't auto-heal on new level. Upgrades handle it.
 
         // Spawn Enemies based on Level
         this.enemies = [];
@@ -103,8 +144,8 @@ export class Game {
         let ex = 0, ey = 0;
         let attempts = 0;
         do {
-            ex = 100 + Math.random() * 600;
-            ey = 100 + Math.random() * 400;
+            ex = 100 + Math.random() * (this.canvas.width - 200);
+            ey = 100 + Math.random() * (this.canvas.height - 200);
             attempts++;
         } while (this.level.walls.some((w: any) =>
             ex > w.x - 40 && ex < w.x + w.w + 40 &&
@@ -171,6 +212,14 @@ export class Game {
     }
 
     update(dt: number) {
+        this.input.update(); // Poll Gamepads
+
+        // Toggle Help
+        if (this.input.isDown('Digit0') && this.inputBlockTimer <= 0) {
+            this.toggleHelp();
+            this.inputBlockTimer = 0.2;
+        }
+
         // Shake Update
         if (this.shakeTime > 0) {
             this.shakeTime -= dt;
@@ -236,7 +285,7 @@ export class Game {
 
             // Input to Start (Blocked for short time after return)
             if (this.inputBlockTimer <= 0) {
-                if (this.input.isDown('Space')) {
+                if (this.input.isDown('Space') || this.input.isDown('Enter') || this.input.gamepadShoot) {
                     this.startGame('stage');
                 }
                 if (this.input.isDown('KeyB')) {
@@ -264,27 +313,48 @@ export class Game {
                 }
             }
 
-            if (this.input.isDown('ArrowLeft') && this.inputBlockTimer <= 0) {
+            const isLeft = this.input.isDown('ArrowLeft') || this.input.axisLeft.x < -0.5;
+            const isRight = this.input.isDown('ArrowRight') || this.input.axisLeft.x > 0.5;
+            const isConfirm = this.input.isDown('Space') || this.input.isDown('Enter') || this.input.gamepadShoot;
+
+            if (isLeft && this.inputBlockTimer <= 0) {
                 this.upgradeSelectionIndex = (this.upgradeSelectionIndex - 1 + this.upgradeOptions.length) % this.upgradeOptions.length;
                 this.inputBlockTimer = 0.2; // Input debounce
                 this.updateUI(); // Re-render to show selection
             }
-            if (this.input.isDown('ArrowRight') && this.inputBlockTimer <= 0) {
+            if (isRight && this.inputBlockTimer <= 0) {
                 this.upgradeSelectionIndex = (this.upgradeSelectionIndex + 1) % this.upgradeOptions.length;
                 this.inputBlockTimer = 0.2; // Input debounce
                 this.updateUI();
             }
-            if (this.input.isDown('Space') && this.inputBlockTimer <= 0) {
-                this.selectUpgrade(this.upgradeSelectionIndex);
+            if (isConfirm && this.inputBlockTimer <= 0) {
+                if (this.gameState === 'win') {
+                    this.selectUpgrade(this.upgradeSelectionIndex);
+                } else if (this.gameState === 'victory' || this.gameState === 'lose') {
+                    this.firstNameScreen();
+                }
             }
             return;
+        }
+
+        // Battle Royale Countdown
+        if (this.countdownTimer > 0) {
+            this.countdownTimer -= dt;
+            if (this.countdownTimer <= 0) {
+                this.countdownTimer = 0;
+                // Maybe play sound?
+            } else {
+                return; // Block gameplay
+            }
         }
 
         // Check for shots
         const originalBulletCount = this.bullets.length;
 
         // Update Player
-        this.player.update(dt, this.input, this.level, this.bullets);
+        // Block input briefly at start to prevent accidental shots
+        const playerInput = this.inputBlockTimer > 0 ? undefined : this.input;
+        this.player.update(dt, playerInput, this.level, this.bullets);
 
         // Update Enemies
         // In BR, they target Player AND Other Enemies.
@@ -331,15 +401,16 @@ export class Game {
                 this.triggerShake(0.5, 10);
 
                 // Player Hit Logic
-                this.playerLives -= b.damage; // Use bullet damage
+                const dead = this.player.takeDamage(b.damage);
                 this.updateHUD();
 
-                if (this.playerLives <= 0) {
+                if (dead) {
                     if (this.gameMode === 'stage') this.saveRanking();
                     this.gameState = 'lose';
                     this.updateUI();
                 } else {
                     if (this.gameMode === 'battleroyale') {
+                        // BR is 1 HP, so dead anyway usually, but just in case
                         this.gameState = 'lose';
                         this.updateUI();
                     } else {
@@ -393,6 +464,10 @@ export class Game {
 
     firstNameScreen() {
         this.gameState = 'start';
+        this.canvas.width = 800;
+        this.canvas.height = 600;
+        this.inputBlockTimer = 0.5;
+        this.updateUI();
     }
 
     updateHUD() {
@@ -400,25 +475,27 @@ export class Game {
         const hudStage = document.getElementById('hud-stage');
 
         if (hudLives) {
-            const hearts = '❤'.repeat(Math.max(0, this.playerLives));
-            hudLives.innerText = `Lives: ${hearts}`;
-            hudLives.style.color = this.playerLives <= 1 ? '#f55' : 'white';
+            const hearts = '❤'.repeat(Math.max(0, this.player.hp));
+            hudLives.innerText = `ライフ: ${hearts}`;
+            hudLives.style.color = this.player.hp <= 1 ? '#f55' : 'white';
         }
 
         if (hudStage) {
             if (this.gameMode === 'battleroyale') {
-                hudStage.innerText = `Alive: ${this.enemies.length + (this.playerLives > 0 ? 1 : 0)}`;
+                hudStage.innerText = `生存数: ${this.enemies.length + (this.player.hp > 0 ? 1 : 0)}`;
             } else {
-                hudStage.innerText = `Stage: ${this.currentLevelIdx + 1}`;
+                hudStage.innerText = `ステージ: ${this.currentLevelIdx + 1}`;
             }
         }
     }
 
     getSafeSpawnPosition(radius: number): { x: number, y: number } {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
         // Try up to 100 times to find a spot not overlapping walls
         for (let i = 0; i < 100; i++) {
-            const x = 50 + Math.random() * 700;
-            const y = 50 + Math.random() * 500;
+            const x = 50 + Math.random() * (w - 100);
+            const y = 50 + Math.random() * (h - 100);
 
             let safe = true;
             // Check Walls
@@ -437,11 +514,21 @@ export class Game {
         this.gameMode = mode;
         this.gameState = 'playing';
 
+        // Reset Player Traits (Clear Upgrades)
+        this.player = new Tank(0, 0, true);
+
         if (mode === 'battleroyale') {
-            this.playerLives = 1; // HARDCORE
+            this.canvas.width = 1200;
+            this.canvas.height = 800;
+
+            this.player.maxHp = 1; // HARDCORE
+            this.player.hp = 1;
+
             this.currentLevelIdx = 0;
             // Load Level -1 for BR Arena
-            this.level = new Level(-1);
+            this.level = new Level(-1, 1200, 800);
+
+            this.countdownTimer = 3; // Start Countdown
 
             this.bullets = [];
             this.particles = [];
@@ -450,7 +537,7 @@ export class Game {
             const pSpawn = this.getSafeSpawnPosition(15);
             this.player.x = pSpawn.x;
             this.player.y = pSpawn.y;
-            this.player.hp = this.player.maxHp;
+            // hp already set
 
             // Spawn 9 Enemies Safe
             this.enemies = [];
@@ -459,7 +546,11 @@ export class Game {
             }
             this.playerIndicatorTimer = 3.0;
         } else {
-            this.playerLives = 5;
+            this.player.maxHp = 3; // Standard HP (was 5 in previous playerLives, let's keep it challenging or 5?)
+            // If user expects 5, set 5. Default Tank is 3.
+            this.player.maxHp = 5;
+            this.player.hp = 5;
+
             this.currentLevelIdx = 0;
             this.initLevel(); // Standard Level 0 load
         }
@@ -493,26 +584,26 @@ export class Game {
         const potentialUpgrades = [
             {
                 id: 'speed',
-                label: 'Engine Boost',
-                description: 'Move Speed +15%',
+                label: 'エンジン強化',
+                description: '移動速度 +15%',
                 apply: (t: Tank) => { t.speed *= 1.15; }
             },
             {
                 id: 'firerate',
-                label: 'Rapid Reloader',
-                description: 'Fire Rate +15%',
+                label: 'クイックリロード',
+                description: '連射速度 +15%',
                 apply: (t: Tank) => { t.fireRate *= 0.85; }
             },
             {
                 id: 'bulletspeed',
-                label: 'Velocity Grade',
-                description: 'Bullet Speed +20%',
+                label: '高速弾',
+                description: '弾速 +20%',
                 apply: (t: Tank) => { t.bulletSpeed *= 1.2; }
             },
             {
                 id: 'hp',
-                label: 'Reinforced Armor',
-                description: 'Max HP +1 & Heal',
+                label: '強化装甲',
+                description: '最大HP+1 & 回復',
                 apply: (t: Tank) => { t.maxHp += 1; t.hp = t.maxHp; }
             }
         ];
@@ -521,8 +612,8 @@ export class Game {
         if (this.player.weaponType !== 'shotgun') {
             potentialUpgrades.push({
                 id: 'shotgun',
-                label: 'Spread Shot Module',
-                description: 'Switch to 3-Way Shotgun',
+                label: '拡散弾モジュール',
+                description: '3方向ショットガンに変更',
                 apply: (t: Tank) => { t.weaponType = 'shotgun'; }
             });
         }
@@ -559,14 +650,14 @@ export class Game {
 
         let html = '';
         if (this.gameState === 'start') {
-            html += '<h1>TANK BATTLE</h1><p>[SPACE] Campaign Mode</p><p>[B] Battle Royale (10 Players, 1 Life)</p>';
+            html += '<h1>タンクバトル</h1><p>[SPACE/ボタン] キャンペーンモード</p><p>[B] バトルロイヤル (生存戦)</p>';
             this.renderRanking(ui, html); // Helper to append Ranking
             ui.style.display = 'flex';
         } else if (this.gameState === 'playing') {
             ui.style.display = 'none';
         } else if (this.gameState === 'win') {
-            html += `<h1>STAGE ${this.currentLevelIdx + 1} CLEARED!</h1>
-                     <p>Select an Upgrade:</p>
+            html += `<h1>ステージ ${this.currentLevelIdx + 1} クリア！</h1>
+                     <p>能力を選択:</p>
                      <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">`;
 
             this.upgradeOptions.forEach((up, i) => {
@@ -595,15 +686,15 @@ export class Game {
             return; // Return early so we don't overwrite with bottom logic
 
         } else if (this.gameState === 'victory') { // Battle Royale Win
-            html += `<h1>CHAMPION!</h1><p>You are the Last Tank Standing!</p><p>Press SPACE to Return</p>`;
+            html += `<h1>優勝！</h1><p>最後の生存者だ！</p><p>[SPACE/ボタン] で戻る</p>`;
             ui.innerHTML = html;
             ui.style.display = 'flex';
         } else if (this.gameState === 'lose') {
             if (this.gameMode === 'battleroyale') {
-                html += `<h1>ELIMINATED</h1><p>Better luck next time...</p><p>Press SPACE to Return</p>`;
+                html += `<h1>敗北...</h1><p>次は頑張ろう！</p><p>[SPACE/ボタン] で戻る</p>`;
             } else {
                 const stage = this.currentLevelIdx + 1;
-                html += `<h1>GAME OVER</h1><p>You reached Stage ${stage}</p><p>Press SPACE to Try Again</p>`;
+                html += `<h1>ゲームオーバー</h1><p>到達ステージ: ${stage}</p><p>[SPACE/ボタン] でリトライ</p>`;
                 this.renderRanking(ui, html);
             }
             ui.innerHTML = html;
@@ -616,9 +707,29 @@ export class Game {
             container.innerHTML = baseHtml;
             return;
         }
-        let list = '<div style="margin-top:20px; text-align:left;"><h3>Stages Reached</h3><ol>';
-        this.highScores.forEach(s => list += `<li>Stage ${s}</li>`);
-        list += '</ol></div>';
+        let list = '<div style="margin-top:20px; text-align:left;"><h3>到達記録</h3><ol>';
+
+        // Show Top 5
+        const top5 = this.highScores.slice(0, 5);
+
+        top5.forEach((s, index) => {
+            const isMe = (index === this.lastRank && s.date === this.currentScoreDate);
+            const style = isMe ? 'color: #f55; font-weight: bold;' : '';
+            list += `<li style="${style}">ステージ ${s.stage}</li>`;
+        });
+        list += '</ol>';
+
+        // If my rank is below Top 5, show it
+        if (this.lastRank >= 5) {
+            list += `<p style="color: #f55; font-weight: bold; margin-top: 5px;">あなたの順位: ${this.lastRank + 1}位</p>`;
+        } else if (this.lastRank === -1 && this.gameState === 'lose' && this.gameMode === 'stage') {
+            // Maybe game wasn't saved? Or > 100?
+            // If > 100, we don't know exact rank if we sliced.
+            // But we kept 100. If > 100, say "圏外" (Outside Rank)?
+            // For now assume top 100 covers it.
+        }
+
+        list += '</div>';
         container.innerHTML = baseHtml + list;
     }
 
@@ -706,7 +817,7 @@ export class Game {
                 this.ctx.fillStyle = '#ffff00';
                 this.ctx.font = 'bold 20px Arial';
                 this.ctx.textAlign = 'center';
-                this.ctx.fillText('YOU', 0, -60 * pulse);
+                this.ctx.fillText('YOU', 0, 70 * pulse);
 
                 // Arrow
                 this.ctx.beginPath();
@@ -731,6 +842,47 @@ export class Game {
             if (p.type !== 'shockwave') p.draw(this.ctx);
         }
 
+        if (this.countdownTimer > 0) {
+            this.ctx.save();
+            this.ctx.fillStyle = 'white';
+            this.ctx.font = 'bold 80px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.shadowColor = 'black';
+            this.ctx.shadowBlur = 10;
+            const text = Math.ceil(this.countdownTimer).toString();
+            this.ctx.fillText(text, this.canvas.width / 2, this.canvas.height / 2);
+            this.ctx.restore();
+        }
+
         this.ctx.restore();
+    }
+
+    initHelpUI() {
+        const div = document.createElement('div');
+        div.id = 'help-ui';
+        div.style.position = 'absolute';
+        div.style.bottom = '10px';
+        div.style.left = '10px';
+        div.style.color = 'rgba(255, 255, 255, 0.7)';
+        div.style.fontFamily = '"Segoe UI", monospace';
+        div.style.fontSize = '12px';
+        div.style.pointerEvents = 'none';
+        div.style.textShadow = '1px 1px 1px black';
+        div.innerHTML = `
+            <b>操作方法</b><br>
+            移動: WASD / 矢印 / 左スティック / パッド長押し<br>
+            照準: マウス / 右スティック<br>
+            発射: スペース / ボタン / Rトリガー<br>
+            [0] ヘルプ切替
+        `;
+        document.body.appendChild(div);
+        this.helpUI = div;
+    }
+
+    toggleHelp() {
+        if (this.helpUI) {
+            this.helpUI.style.display = this.helpUI.style.display === 'none' ? 'block' : 'none';
+        }
     }
 }

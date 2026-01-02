@@ -8,7 +8,7 @@ import { checkAABBCollision } from '../utils/MathUtils';
 export class Tank extends Entity {
     rotation: number = 0;
     speed: number = 100;
-    rotationSpeed: number = 3;
+    rotationSpeed: number = 10;
     width: number = 30;
     height: number = 30;
 
@@ -75,28 +75,95 @@ export class Tank extends Entity {
 
         // Player Control
         if (this.isPlayer && input && level && bullets) {
+            // Keyboard Movement
             let dx = 0;
             let dy = 0;
 
-            if (input.isDown('ArrowLeft')) dx -= 1;
-            if (input.isDown('ArrowRight')) dx += 1;
-            if (input.isDown('ArrowUp')) dy -= 1;
-            if (input.isDown('ArrowDown')) dy += 1;
+            if (input.isDown('ArrowLeft') || input.isDown('KeyA')) dx -= 1;
+            if (input.isDown('ArrowRight') || input.isDown('KeyD')) dx += 1;
+            if (input.isDown('ArrowUp') || input.isDown('KeyW')) dy -= 1;
+            if (input.isDown('ArrowDown') || input.isDown('KeyS')) dy += 1;
+
+            // Mouse Movement (Hold Click to Move)
+            if (input.mouseDown) {
+                const dist = Math.sqrt((input.mouseX - this.x) ** 2 + (input.mouseY - this.y) ** 2);
+                if (dist > 20) { // Deadzone
+                    dx += (input.mouseX - this.x) / dist;
+                    dy += (input.mouseY - this.y) / dist;
+                }
+            }
+
+            // Mobile / Gamepad Movement
+            if (input.axisLeft.x !== 0 || input.axisLeft.y !== 0) {
+                dx += input.axisLeft.x;
+                dy += input.axisLeft.y;
+            }
 
             if (dx !== 0 || dy !== 0) {
                 // Normalize input
                 const len = Math.sqrt(dx * dx + dy * dy);
-                dx /= len;
-                dy /= len;
+                if (len > 1) { // Only normalize if > 1 to allow analog-like control? Or always normalize?
+                    // Always normalize to cap speed
+                    dx /= len;
+                    dy /= len;
+                }
 
                 // Move
                 this.move(dx * this.speed * dt, dy * this.speed * dt, level);
+            }
 
-                // Rotate towards movement direction
+            // Aiming Priority: Right Stick -> Left Stick (Move) -> Mouse -> Keyboard (Move)
+            const rx = input.axisRight.x;
+            const ry = input.axisRight.y;
+            const rightStickActive = Math.abs(rx) > 0.1 || Math.abs(ry) > 0.1;
+            const leftStickActive = Math.abs(input.axisLeft.x) > 0.1 || Math.abs(input.axisLeft.y) > 0.1;
+
+            if (rightStickActive) {
+                const targetRotation = Math.atan2(ry, rx);
+
+                // Smooth rotation
+                let current = this.rotation;
+                while (current > Math.PI) current -= Math.PI * 2;
+                while (current <= -Math.PI) current += Math.PI * 2;
+
+                let diff = targetRotation - current;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff <= -Math.PI) diff += Math.PI * 2;
+
+                const rotStep = this.rotationSpeed * dt;
+
+                if (Math.abs(diff) < rotStep) {
+                    this.rotation = targetRotation;
+                } else {
+                    this.rotation += Math.sign(diff) * rotStep;
+                }
+            } else if (leftStickActive) {
+                // Left Stick Rotation (Face movement direction)
                 const targetRotation = Math.atan2(dy, dx);
 
                 // Smooth rotation
-                // Normalize current rotation to -PI to PI
+                let current = this.rotation;
+                while (current > Math.PI) current -= Math.PI * 2;
+                while (current <= -Math.PI) current += Math.PI * 2;
+
+                let diff = targetRotation - current;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff <= -Math.PI) diff += Math.PI * 2;
+
+                const rotStep = this.rotationSpeed * dt;
+
+                if (Math.abs(diff) < rotStep) {
+                    this.rotation = targetRotation;
+                } else {
+                    this.rotation += Math.sign(diff) * rotStep;
+                }
+            } else if (input.activeInputType === 'mouse') {
+                // Mouse Aiming (Instant)
+                this.rotation = Math.atan2(input.mouseY - this.y, input.mouseX - this.x);
+            } else if (dx !== 0 || dy !== 0) {
+                // Aim follows movement (Fallback for Keyboard)
+                const targetRotation = Math.atan2(dy, dx);
+                // Smooth rotation
                 let current = this.rotation;
                 while (current > Math.PI) current -= Math.PI * 2;
                 while (current <= -Math.PI) current += Math.PI * 2;
@@ -114,7 +181,8 @@ export class Tank extends Entity {
                 }
             }
 
-            if (input.isDown('Space')) {
+
+            if (input.isDown('Space') || input.gamepadShoot || input.gamepadShoot) { // Duplicate check harmless
                 this.shoot(bullets);
             }
         }
