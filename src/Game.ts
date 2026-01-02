@@ -264,16 +264,18 @@ export class Game {
                 }
             }
 
-            if (this.input.isDown('Space')) {
-                if (this.gameState === 'win') {
-                    // Start Next Level handled by Upgrade UI now
-                } else if (this.gameState === 'victory' || this.gameState === 'lose') {
-                    // Game Over or Victory (End of run) -> Return to Title
-                    this.gameState = 'start';
-                    this.inputBlockTimer = 0.5; // Prevent immediate restart
-                    this.updateUI();
-                    this.updateHUD();
-                }
+            if (this.input.isDown('ArrowLeft') && this.inputBlockTimer <= 0) {
+                this.upgradeSelectionIndex = (this.upgradeSelectionIndex - 1 + this.upgradeOptions.length) % this.upgradeOptions.length;
+                this.inputBlockTimer = 0.2; // Input debounce
+                this.updateUI(); // Re-render to show selection
+            }
+            if (this.input.isDown('ArrowRight') && this.inputBlockTimer <= 0) {
+                this.upgradeSelectionIndex = (this.upgradeSelectionIndex + 1) % this.upgradeOptions.length;
+                this.inputBlockTimer = 0.2; // Input debounce
+                this.updateUI();
+            }
+            if (this.input.isDown('Space') && this.inputBlockTimer <= 0) {
+                this.selectUpgrade(this.upgradeSelectionIndex);
             }
             return;
         }
@@ -282,8 +284,6 @@ export class Game {
         const originalBulletCount = this.bullets.length;
 
         // Update Player
-        // Passing all enemies as targets for Battle Royale? 
-        // No, player controls via input.
         this.player.update(dt, this.input, this.level, this.bullets);
 
         // Update Enemies
@@ -339,8 +339,6 @@ export class Game {
                     this.gameState = 'lose';
                     this.updateUI();
                 } else {
-                    // Respawn if Stage mode?
-                    // BR Mode: 1 Life! Game Over immediately.
                     if (this.gameMode === 'battleroyale') {
                         this.gameState = 'lose';
                         this.updateUI();
@@ -357,10 +355,6 @@ export class Game {
             // Check Enemies
             for (let j = this.enemies.length - 1; j >= 0; j--) {
                 const enemy = this.enemies[j];
-                // In BR, enemies can hurt each other
-                // In Stage, usually friendly fire off? User said "Enemy-on-Enemy Damage" for BR.
-                // Current code: `b.owner !== enemy`.
-
                 const canHit = b.owner !== enemy && (this.gameMode === 'battleroyale' || b.owner === this.player);
 
                 if (canHit && this.checkBulletTankCollision(b, enemy)) {
@@ -401,8 +395,6 @@ export class Game {
         this.gameState = 'start';
     }
 
-    // ... (safe spawn logic)
-
     updateHUD() {
         const hudLives = document.getElementById('hud-lives');
         const hudStage = document.getElementById('hud-stage');
@@ -436,10 +428,6 @@ export class Game {
                     break;
                 }
             }
-
-            // Should also check other tanks? Maybe overkill, but good for BR start.
-            // For now, walls are the main issue.
-
             if (safe) return { x, y };
         }
         return { x: 400, y: 300 }; // Fallback
@@ -454,12 +442,6 @@ export class Game {
             this.currentLevelIdx = 0;
             // Load Level -1 for BR Arena
             this.level = new Level(-1);
-            // In initLevel we usually overwrite level, so let's modify initLevel or just set it here manually
-            // Actually startGame calls initLevel below... let's fix that.
-
-            // We need to override the level loading logic in initLevel or just force it here.
-            // Let's modify initLevel to take an optional override.
-            // Or simpler: Just set it here and DON'T call initLevel, just spawn entities.
 
             this.bullets = [];
             this.particles = [];
@@ -486,15 +468,12 @@ export class Game {
         this.updateHUD();
     }
 
-
     triggerShake(duration: number, intensity: number) {
         this.shakeTime = duration;
         this.shakeIntensity = intensity;
     }
 
     spawnExplosion(x: number, y: number, color: string, count: number, big: boolean) {
-        // ... (Explosion logic same) ...
-        // Sparks
         for (let i = 0; i < count; i++) {
             this.particles.push(new Particle(x, y, color, big ? 150 : 50));
         }
@@ -508,6 +487,7 @@ export class Game {
 
     // Upgrade System
     upgradeOptions: { id: string, label: string, description: string, apply: (t: Tank) => void }[] = [];
+    upgradeSelectionIndex: number = 0;
 
     generateUpgrades() {
         const potentialUpgrades = [
@@ -517,7 +497,6 @@ export class Game {
                 description: 'Move Speed +15%',
                 apply: (t: Tank) => { t.speed *= 1.15; }
             },
-            // Damage upgrade removed as per request
             {
                 id: 'firerate',
                 label: 'Rapid Reloader',
@@ -551,6 +530,7 @@ export class Game {
         // Shuffle and pick 3
         const shuffled = potentialUpgrades.sort(() => 0.5 - Math.random());
         this.upgradeOptions = shuffled.slice(0, 3);
+        this.upgradeSelectionIndex = 1; // Default to center option
     }
 
     selectUpgrade(index: number) {
@@ -573,8 +553,8 @@ export class Game {
         const ui = document.getElementById('game-ui');
         if (!ui) return;
 
-        // Clear existing listeners to prevent doubles? 
-        // We'll rewrite innerHTML so listeners are gone. 
+        // Clear existing listeners to prevent doubles?
+        // We'll rewrite innerHTML so listeners are gone.
         // Need to attach new listeners after HTML set.
 
         let html = '';
@@ -590,7 +570,12 @@ export class Game {
                      <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">`;
 
             this.upgradeOptions.forEach((up, i) => {
-                html += `<button id="upg-${i}" style="padding: 10px 20px; font-size: 16px; background: #222; border: 2px solid #0f0; color: #fff; cursor: pointer;">
+                const isSelected = i === this.upgradeSelectionIndex;
+                const border = isSelected ? '4px solid #fff' : '2px solid #0f0';
+                const bg = isSelected ? '#333' : '#222';
+                const transform = isSelected ? 'scale(1.1)' : 'scale(1.0)';
+
+                html += `<button id="upg-${i}" style="padding: 10px 20px; font-size: 16px; background: ${bg}; border: ${border}; color: #fff; cursor: pointer; transform: ${transform}; transition: all 0.1s;">
                             <div style="font-weight:bold; color: #0f0;">${up.label}</div>
                             <div style="font-size: 12px; color: #aaa;">${up.description}</div>
                          </button>`;
@@ -636,8 +621,6 @@ export class Game {
         list += '</ol></div>';
         container.innerHTML = baseHtml + list;
     }
-
-    // ... (rest is same)
 
     checkBulletTankCollision(b: Bullet, t: Tank): boolean {
         // ... (Same collision) ...
