@@ -23,7 +23,13 @@ export class Tank extends Entity {
     maxHp: number = 1;
     fireRate: number = 0.5;
     weaponType: 'normal' | 'shotgun' = 'normal';
+
     role: 'standard' | 'sniper' | 'machinegun' | 'shotgun' | 'dasher' | 'armored' | 'heavy' = 'standard';
+
+    // Upgrade Stats
+    bulletRicochet: number = 0;
+    bulletHoming: number = 0; // Strength
+    vampire: boolean = false;
 
     constructor(
         x: number,
@@ -54,16 +60,22 @@ export class Tank extends Entity {
     }
 
     takeDamage(amount: number): boolean {
+        if (this.invincibleTimer > 0) return false;
         this.hp -= amount;
         return this.hp <= 0;
     }
 
     // AI State
+    invincibleTimer: number = 0; // Invincibility logic
     aiTimer: number = 0;
     aiAction: 'idle' | 'moveBase' | 'rotateLeft' | 'rotateRight' | 'forward' | 'backward' = 'idle';
     aiShootTimer: number = 0;
 
     update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[], targets?: Tank[]) {
+        if (this.invincibleTimer > 0) {
+            this.invincibleTimer -= dt;
+        }
+
         if (this.shootTimer > 0) {
             this.shootTimer -= dt;
         }
@@ -327,11 +339,15 @@ export class Tank extends Entity {
                 const sbx = this.x + Math.cos(angle) * 20;
                 const sby = this.y + Math.sin(angle) * 20;
                 const bullet = new Bullet(sbx, sby, angle, this, bColor, this.bulletSpeed, this.bulletDamage);
+                bullet.maxBounces = 1 + this.bulletRicochet;
+                bullet.homingStrength = this.bulletHoming;
                 bullets.push(bullet);
             }
         } else {
             // Normal
             const bullet = new Bullet(bx, by, this.rotation, this, bColor, this.bulletSpeed, this.bulletDamage);
+            bullet.maxBounces = 1 + this.bulletRicochet;
+            bullet.homingStrength = this.bulletHoming;
             bullets.push(bullet);
         }
 
@@ -355,6 +371,15 @@ export class Tank extends Entity {
     draw(ctx: CanvasRenderingContext2D): void {
         ctx.save();
         ctx.translate(this.x, this.y);
+
+        // Blinking if invincible
+        if (this.invincibleTimer > 0) {
+            // Blink roughly 10 times a second
+            if (Math.floor(Date.now() / 100) % 2 === 0) {
+                ctx.globalAlpha = 0.5;
+            }
+        }
+
         ctx.rotate(this.rotation);
 
         // -- Visuals based on Role --

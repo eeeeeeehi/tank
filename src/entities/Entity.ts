@@ -1,6 +1,9 @@
 export abstract class Entity {
     public x: number;
+
     public y: number;
+    public active: boolean = true;
+
 
     constructor(x: number, y: number) {
         this.x = x;

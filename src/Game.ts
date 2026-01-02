@@ -29,6 +29,8 @@ export class Game {
     highScores: { stage: number, date: number }[] = [];
     lastRank: number = -1;
     currentScoreDate: number = 0; // To identify current run
+
+    acquiredSkills: string[] = []; // Track upgrades
     soundManager: SoundManager;
 
     // Screen Shake
@@ -126,6 +128,7 @@ export class Game {
         this.player.y = 300;
         this.player.rotation = 0;
         // Don't auto-heal on new level. Upgrades handle it.
+        this.player.invincibleTimer = 1.5;
 
         // Spawn Enemies based on Level
         this.enemies = [];
@@ -254,7 +257,7 @@ export class Game {
             // Update Bullets
             for (let i = this.bullets.length - 1; i >= 0; i--) {
                 const b = this.bullets[i];
-                b.update(dt, this.level);
+                b.update(dt, this.level, demoTanks);
                 if (!b.active) {
                     this.spawnExplosion(b.x, b.y, '#ff0', 5, false);
                     this.bullets.splice(i, 1);
@@ -351,6 +354,9 @@ export class Game {
         // Check for shots
         const originalBulletCount = this.bullets.length;
 
+        // Player vs Enemy Bullet Collision
+        this.checkBulletBulletCollisions();
+
         // Update Player
         // Block input briefly at start to prevent accidental shots
         const playerInput = this.inputBlockTimer > 0 ? undefined : this.input;
@@ -372,7 +378,7 @@ export class Game {
         // Update Bullets
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             const b = this.bullets[i];
-            b.update(dt, this.level);
+            b.update(dt, this.level, allTanks);
             if (!b.active) {
                 // Bullet hit wall or expired
                 this.spawnExplosion(b.x, b.y, '#ff0', 5, false);
@@ -418,6 +424,7 @@ export class Game {
                         this.player.x = 100;
                         this.player.y = 300;
                         this.player.rotation = 0;
+                        this.player.invincibleTimer = 1.5; // Invincible on respawn
                     }
                 }
                 break;
@@ -438,6 +445,14 @@ export class Game {
                     if (dead) {
                         this.spawnExplosion(enemy.x, enemy.y, enemy.color, 50, true);
                         this.triggerShake(0.3, 5);
+
+                        // Vampire Effect
+                        const owner = b.owner as Tank;
+                        if (owner && owner.vampire && owner.hp < owner.maxHp && Math.random() < 0.1) {
+                            owner.hp++;
+                            // Effect?
+                        }
+
                         this.enemies.splice(j, 1);
 
                         // Win Check
@@ -487,6 +502,18 @@ export class Game {
                 hudStage.innerText = `ステージ: ${this.currentLevelIdx + 1}`;
             }
         }
+
+        const hudSkills = document.getElementById('hud-skills');
+        if (hudSkills) {
+            if (this.acquiredSkills.length === 0) {
+                hudSkills.innerText = 'スキル: なし';
+            } else {
+                const counts: { [key: string]: number } = {};
+                this.acquiredSkills.forEach(s => counts[s] = (counts[s] || 0) + 1);
+                const text = Object.keys(counts).map(k => counts[k] > 1 ? `${k} x${counts[k]}` : k).join(', ');
+                hudSkills.innerText = `スキル: ${text}`;
+            }
+        }
     }
 
     getSafeSpawnPosition(radius: number): { x: number, y: number } {
@@ -516,6 +543,7 @@ export class Game {
 
         // Reset Player Traits (Clear Upgrades)
         this.player = new Tank(0, 0, true);
+        this.acquiredSkills = [];
 
         if (mode === 'battleroyale') {
             this.canvas.width = 1200;
@@ -523,6 +551,7 @@ export class Game {
 
             this.player.maxHp = 1; // HARDCORE
             this.player.hp = 1;
+            this.player.invincibleTimer = 1.5;
 
             this.currentLevelIdx = 0;
             // Load Level -1 for BR Arena
@@ -550,6 +579,7 @@ export class Game {
             // If user expects 5, set 5. Default Tank is 3.
             this.player.maxHp = 5;
             this.player.hp = 5;
+            this.player.invincibleTimer = 1.5;
 
             this.currentLevelIdx = 0;
             this.initLevel(); // Standard Level 0 load
@@ -601,12 +631,14 @@ export class Game {
                 apply: (t: Tank) => { t.bulletSpeed *= 1.2; }
             },
             {
-                id: 'hp',
-                label: '強化装甲',
-                description: '最大HP+1 & 回復',
-                apply: (t: Tank) => { t.maxHp += 1; t.hp = t.maxHp; }
+                id: 'shrink',
+                label: '小型化モジュール',
+                description: 'サイズ -20% (回避率UP)',
+                apply: (t: Tank) => { t.width *= 0.8; t.height *= 0.8; }
             }
         ];
+
+        // Removed HP Upgrade as requested
 
         // Add Shotgun option if player doesn't have it yet
         if (this.player.weaponType !== 'shotgun') {
@@ -618,6 +650,23 @@ export class Game {
             });
         }
 
+        // New Upgrades
+        potentialUpgrades.push({
+            id: 'ricochet',
+            label: '反射弾',
+            description: '壁の反射回数 +1',
+            apply: (t: Tank) => { t.bulletRicochet++; }
+        });
+
+        if (!this.player.vampire) {
+            potentialUpgrades.push({
+                id: 'vampire',
+                label: 'ドレイン装甲',
+                description: '敵撃破時に10%で回復',
+                apply: (t: Tank) => { t.vampire = true; }
+            });
+        }
+
         // Shuffle and pick 3
         const shuffled = potentialUpgrades.sort(() => 0.5 - Math.random());
         this.upgradeOptions = shuffled.slice(0, 3);
@@ -626,7 +675,10 @@ export class Game {
 
     selectUpgrade(index: number) {
         if (this.upgradeOptions[index]) {
-            this.upgradeOptions[index].apply(this.player);
+            const up = this.upgradeOptions[index];
+            up.apply(this.player);
+            this.acquiredSkills.push(up.label);
+
             // Apply healing on clear regardless? Or just maintain HP?
             // Let's heal 1 HP for free on clear
             if (this.player.hp < this.player.maxHp) this.player.hp++;
@@ -731,6 +783,34 @@ export class Game {
 
         list += '</div>';
         container.innerHTML = baseHtml + list;
+    }
+
+    checkBulletBulletCollisions() {
+        for (let i = 0; i < this.bullets.length; i++) {
+            for (let j = i + 1; j < this.bullets.length; j++) {
+                const b1 = this.bullets[i];
+                const b2 = this.bullets[j];
+
+                if (!b1.active || !b2.active) continue;
+
+                // Check ownership: strictly Player vs Enemy or Enemy vs Player
+                const b1IsPlayer = b1.owner === this.player;
+                const b2IsPlayer = b2.owner === this.player;
+
+                if (b1IsPlayer !== b2IsPlayer) {
+                    const dx = b1.x - b2.x;
+                    const dy = b1.y - b2.y;
+                    const distSq = dx * dx + dy * dy;
+                    const radSum = b1.radius + b2.radius;
+
+                    if (distSq < radSum * radSum) {
+                        b1.active = false;
+                        b2.active = false;
+                        this.spawnExplosion((b1.x + b2.x) / 2, (b1.y + b2.y) / 2, '#fff', 5, false);
+                    }
+                }
+            }
+        }
     }
 
     checkBulletTankCollision(b: Bullet, t: Tank): boolean {

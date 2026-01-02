@@ -17,6 +17,8 @@ export class Bullet extends Entity {
     trail: { x: number, y: number }[] = [];
     maxTrailLength: number = 5;
 
+    homingStrength: number = 0;
+
     constructor(x: number, y: number, angle: number, owner: Entity, color: string, speed: number = 200, damage: number = 1) {
         super(x, y);
         this.owner = owner;
@@ -26,8 +28,35 @@ export class Bullet extends Entity {
         this.velocity = new Vector2(Math.cos(angle), Math.sin(angle)).scale(this.speed);
     }
 
-    update(dt: number, level: Level): void {
+    update(dt: number, level: Level, targets?: Entity[]): void {
         if (!this.active) return;
+
+        // Homing Logic
+        if (this.homingStrength > 0 && targets && targets.length > 0) {
+            let closest: Entity | null = null;
+            let minDstSq = Infinity;
+
+            for (const t of targets) {
+                if (t === this.owner || !t.active) continue; // Skip owner and dead/inactive
+                const dx = t.x - this.x;
+                const dy = t.y - this.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < minDstSq) {
+                    minDstSq = d2;
+                    closest = t;
+                }
+            }
+
+            if (closest) {
+                // Steer towards target
+                const desired = new Vector2(closest.x - this.x, closest.y - this.y).normalize();
+                const current = this.velocity.normalize();
+                // Interpolate
+                const steerFactor = this.homingStrength * dt * 5; // Tuning
+                const newDir = current.add(desired.scale(steerFactor)).normalize();
+                this.velocity = newDir.scale(this.speed);
+            }
+        }
 
         // Add to trail in front of movement to look connected or behind? Behind.
         this.trail.push({ x: this.x, y: this.y });
