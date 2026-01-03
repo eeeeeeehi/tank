@@ -112,6 +112,12 @@ export class Bullet extends Entity {
     draw(ctx: CanvasRenderingContext2D): void {
         if (!this.active) return;
 
+        // Boss Bullet Size
+        let drawRadius = this.radius;
+        if (this.owner && (this.owner as any).role === 'boss') {
+            drawRadius = 10; // Big Bullet
+        }
+
         // Draw Trail
         if (this.trail.length > 1) {
             ctx.beginPath();
@@ -121,7 +127,7 @@ export class Bullet extends Entity {
             }
             ctx.lineTo(this.x, this.y); // Connect to current head
             ctx.strokeStyle = this.color;
-            ctx.lineWidth = this.radius;
+            ctx.lineWidth = drawRadius;
             ctx.globalAlpha = 0.5; // Transparent trail
             ctx.stroke();
             ctx.globalAlpha = 1.0;
@@ -129,7 +135,15 @@ export class Bullet extends Entity {
 
         ctx.beginPath();
         ctx.fillStyle = this.color;
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.arc(this.x, this.y, drawRadius, 0, Math.PI * 2);
         ctx.fill();
+
+        if (this.owner && (this.owner as any).role === 'boss') {
+            // Glow for boss bullet
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 10;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
     }
 }

@@ -541,6 +541,7 @@ export class Game {
                             } else {
                                 this.gameState = 'win';
                                 this.generateUpgrades(); // Generate options
+                                this.inputBlockTimer = 1.0; // Block input for 1 second to prevent accidental skip
                             }
                             this.updateUI();
                         }
@@ -758,6 +759,8 @@ export class Game {
     }
 
     selectUpgrade(index: number) {
+        if (this.inputBlockTimer > 0) return; // Prevent selection if blocked
+
         if (this.upgradeOptions[index]) {
             const up = this.upgradeOptions[index];
             up.apply(this.player);
@@ -799,10 +802,16 @@ export class Game {
             this.upgradeOptions.forEach((up, i) => {
                 const isSelected = i === this.upgradeSelectionIndex;
                 const border = isSelected ? '4px solid #fff' : '2px solid #0f0';
-                const bg = isSelected ? '#333' : '#222';
-                const transform = isSelected ? 'scale(1.1)' : 'scale(1.0)';
 
-                html += `<button id="upg-${i}" style="padding: 10px 20px; font-size: 16px; background: ${bg}; border: ${border}; color: #fff; cursor: pointer; transform: ${transform}; transition: all 0.1s;">
+
+                // Dim if blocked
+                const opacity = this.inputBlockTimer > 0 ? '0.7' : '1.0';
+
+                const transform = isSelected ? 'scale(1.1)' : 'scale(1.0)';
+                // Brighter colors
+                const finalBg = isSelected ? '#555' : '#222';
+
+                html += `<button id="upg-${i}" style="pointer-events: auto; padding: 10px 20px; font-size: 16px; background: ${finalBg}; border: ${border}; color: #fff; cursor: pointer; transform: ${transform}; transition: all 0.1s; opacity: ${opacity};">
                             <div style="font-weight:bold; color: #0f0;">${up.label}</div>
                             <div style="font-size: 12px; color: #aaa;">${up.description}</div>
                          </button>`;
@@ -885,12 +894,28 @@ export class Game {
                     const dx = b1.x - b2.x;
                     const dy = b1.y - b2.y;
                     const distSq = dx * dx + dy * dy;
-                    const radSum = b1.radius + b2.radius;
 
-                    if (distSq < radSum * radSum) {
-                        b1.active = false;
-                        b2.active = false;
-                        this.spawnExplosion((b1.x + b2.x) / 2, (b1.y + b2.y) / 2, '#fff', 5, false);
+                    // Refine collision distance
+                    const r1 = (b1.owner && (b1.owner as any).role === 'boss') ? 10 : b1.radius;
+                    const r2 = (b2.owner && (b2.owner as any).role === 'boss') ? 10 : b2.radius;
+
+                    if (distSq < (r1 + r2) * (r1 + r2)) {
+                        // Boss Bullet Dominance
+                        const b1IsBoss = (b1.owner && (b1.owner as any).role === 'boss');
+                        const b2IsBoss = (b2.owner && (b2.owner as any).role === 'boss');
+
+                        if (b1IsBoss && !b2IsBoss) {
+                            b2.active = false; // Destroy player bullet
+                            this.spawnExplosion(b2.x, b2.y, '#fff', 5, false);
+                        } else if (b2IsBoss && !b1IsBoss) {
+                            b1.active = false; // Destroy player bullet
+                            this.spawnExplosion(b1.x, b1.y, '#fff', 5, false);
+                        } else {
+                            // Standard cancellation
+                            b1.active = false;
+                            b2.active = false;
+                            this.spawnExplosion((b1.x + b2.x) / 2, (b1.y + b2.y) / 2, '#fff', 5, false);
+                        }
                     }
                 }
             }
