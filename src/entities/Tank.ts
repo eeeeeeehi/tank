@@ -9,8 +9,8 @@ export class Tank extends Entity {
     rotation: number = 0;
     speed: number = 100;
     rotationSpeed: number = 10;
-    width: number = 30;
-    height: number = 30;
+    width: number = 22;
+    height: number = 22;
 
     shootTimer: number = 0;
     public isPlayer: boolean;
@@ -31,6 +31,9 @@ export class Tank extends Entity {
     bulletHoming: number = 0; // Strength
     vampire: boolean = false;
     drain: number = 0; // % of damage dealt returned as HP
+
+    // Battle Royale Gems
+    gemCount: number = 0;
 
     weaponLevel: number = 1;
 
@@ -75,13 +78,25 @@ export class Tank extends Entity {
         return this.hp <= 0;
     }
 
+    collectGem(amount: number = 1) {
+        this.gemCount += amount;
+
+        // Stat Boosts per Gem
+        this.maxHp += 10 * amount;
+        this.hp = Math.min(this.hp + 20 * amount, this.maxHp); // Heal
+        this.bulletDamage += 2 * amount;
+        this.speed *= (1 + 0.01 * amount); // 1% speed up
+
+        // Visual feedback handled by caller or Game
+    }
+
     // AI State
     invincibleTimer: number = 0; // Invincibility logic
     aiTimer: number = 0;
     aiAction: 'idle' | 'moveBase' | 'rotateLeft' | 'rotateRight' | 'forward' | 'backward' = 'idle';
     aiShootTimer: number = 0;
 
-    update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[], targets?: Tank[], obstacles?: Tank[]) {
+    update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[], targets?: Tank[], obstacles?: Tank[], drops?: any[]) {
         if (this.invincibleTimer > 0) {
             this.invincibleTimer -= dt;
         }
@@ -210,11 +225,11 @@ export class Tank extends Entity {
         }
         // AI Control
         else if (level && bullets) {
-            this.updateAI(dt, level, bullets, targets, obstacles);
+            this.updateAI(dt, level, bullets, targets, obstacles, drops);
         }
     }
 
-    updateAI(dt: number, level: Level, bullets: Bullet[], targets?: Tank[], obstacles?: Tank[]) {
+    updateAI(dt: number, level: Level, bullets: Bullet[], targets?: Tank[], obstacles?: Tank[], drops?: any[]) {
         this.aiTimer -= dt;
 
         // Targeting Logic (Battle Royale)
@@ -233,17 +248,46 @@ export class Tank extends Entity {
             }
         }
 
+        // Gem Hunting Logic (High Priority)
+        let gemTarget: any = null;
+        if (drops && drops.length > 0) {
+            let minGemDist = 200; // Look for gems within range
+            for (const d of drops) {
+                if (!d.active) continue;
+                const dist = Math.sqrt((d.x - this.x) ** 2 + (d.y - this.y) ** 2);
+                if (dist < minGemDist) {
+                    minGemDist = dist;
+                    gemTarget = d;
+                }
+            }
+        }
+
         if (this.aiTimer <= 0) {
             // Pick new action
             this.aiTimer = 0.5 + Math.random() * 1.5; // Faster reactions (0.5-2.0s)
 
-            if (target) {
+            if (gemTarget) {
+                // Move towards Gem
+                const angle = Math.atan2(gemTarget.y - this.y, gemTarget.x - this.x);
+                // Quantize direction? or just move forward with rotation
+                // Tank AI moves by 'forward' and 'rotate'.
+                // We need to rotate towards it.
+                // We'll set rotation target and move forward.
+                // But aiAction only sets "forward", rotation is handled separately below.
+                // So here we should set target to gem for rotation logic?
+                // Let's override 'target' variable? No, keep enemy target for shooting.
+                // We'll just force move forward and rely on rotation logic below.
+                this.aiAction = 'forward';
+            } else if (target) {
                 // Distance Check
                 const dist = Math.sqrt((target.x - this.x) ** 2 + (target.y - this.y) ** 2);
                 let safeDist = 250; // Default keep away distance
                 if (this.role === 'sniper') safeDist = 450;
                 if (this.role === 'shotgun') safeDist = 150;
                 if (this.role === 'dasher') safeDist = 0; // Rush
+
+                // Aggressive override: If idle, just chase
+                // We want them to actively hunt.
 
                 const rand = Math.random();
 
@@ -253,8 +297,8 @@ export class Tank extends Entity {
                     else if (rand < 0.8) this.aiAction = 'rotateLeft';
                     else this.aiAction = 'rotateRight';
                 } else if (dist > safeDist * 1.5) {
-                    // Too far: Chase
-                    if (rand < 0.7) this.aiAction = 'forward';
+                    // Too far: Chase (Primary behavior)
+                    if (rand < 0.8) this.aiAction = 'forward'; // Higher chance to move forward
                     else if (rand < 0.9) this.aiAction = 'rotateLeft';
                     else this.aiAction = 'rotateRight';
                 } else {
@@ -265,7 +309,11 @@ export class Tank extends Entity {
                     else this.aiAction = 'rotateRight';
                 }
             } else {
-                // Random Wander
+                // No target? Wander?
+                // In generic AI, if no target, finding one should be priority.
+                // But updateAI sets targets.
+                // If we are here, we have a target (checked above) or we are wandering.
+                // If target is null, we can do random.
                 const rand = Math.random();
                 if (rand < 0.2) this.aiAction = 'idle';
                 else if (rand < 0.4) this.aiAction = 'rotateLeft';
@@ -275,9 +323,16 @@ export class Tank extends Entity {
             }
         }
 
-        // Rotate towards target if exists
-        if (target) {
-            const targetRotation = Math.atan2(target.y - this.y, target.x - this.x);
+        // Rotate towards target (or GEM) if exists
+        let rotateTarget = target;
+        if (gemTarget) rotateTarget = gemTarget; // Prioritize looking at Gem to move to it? 
+        // Actually, if we look at Gem, we might shoot at Gem. 
+        // Better to rotate towards Gem for movement, but shoot at enemy?
+        // Tank moves in direction of rotation. So we MUST face Gem to move to it.
+        // So yes, rotateTarget = gemTarget.
+
+        if (rotateTarget) {
+            const targetRotation = Math.atan2(rotateTarget.y - this.y, rotateTarget.x - this.x);
 
             // Smooth rotation logic
             let current = this.rotation;
@@ -317,22 +372,36 @@ export class Tank extends Entity {
         if (this.aiShootTimer <= 0) {
             // Only shoot if facing target
             if (target) {
+                // Predictive Aiming
+                // Estimate target velocity (simple difference since last frame? No, we don't have prev pos handy easily without adding state).
+                // Or just assume they are moving?
+                // Flanking logic handled by movement.
+                // A wrapper for aim:
+
+                // Let's assume target is moving 50% of time and add a lead offset?
+                // Better: Just use current pos for now but with TIGHTER accuracy.
+                // User said "smarter".
+                // Smart AI = Lead shots.
+                // If I can't look up velocity, I can cheat and peek input? No.
+                // I'll stick to tighter accuracy first.
+
                 const targetRotation = Math.atan2(target.y - this.y, target.x - this.x);
                 let diff = targetRotation - this.rotation;
                 while (diff > Math.PI) diff -= Math.PI * 2;
                 while (diff <= -Math.PI) diff += Math.PI * 2;
 
                 // Shoots only if aim is accurate (Strict ~23 degrees)
-                if (Math.abs(diff) < 0.4) {
-                    // Small Accuracy Error (+- 10 degrees)
-                    const error = (Math.random() - 0.5) * 0.35;
+                if (Math.abs(diff) < 0.3) {
+                    // Small Accuracy Error (Reduces with tier? No access to tier here easily)
+                    // Reduced default error from 0.35 to 0.15 (Much sharper)
+                    const error = (Math.random() - 0.5) * 0.15;
                     this.rotation += error;
 
                     this.shoot(bullets);
 
                     this.rotation -= error; // Reset rotation so they don't jitter visibly
 
-                    this.aiShootTimer = this.fireRate * (1 + Math.random()); // Fire rate variance
+                    this.aiShootTimer = this.fireRate * (0.8 + Math.random() * 0.4); // Less variance, faster checks
                 } else {
                     this.aiShootTimer = 0.1; // Check again soon
                 }
@@ -368,13 +437,13 @@ export class Tank extends Entity {
 
     checkTankCollisions(obstacles: Tank[]): boolean {
         // Simple Circle Collision
-        const r = this.width / 2; // Approx radius
+        const rSelf = this.width / 2; // Approx radius
         for (const other of obstacles) {
             if (other === this) continue;
             if (other.hp <= 0) continue; // Ignore dead tanks
 
             const distSq = (this.x - other.x) ** 2 + (this.y - other.y) ** 2;
-            const minDist = r + other.width / 2;
+            const minDist = rSelf + other.width / 2;
 
             if (distSq < minDist * minDist) return true;
         }
@@ -618,6 +687,15 @@ export class Tank extends Entity {
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
             ctx.lineWidth = 1;
             ctx.strokeRect(this.x - barW / 2, this.y + yOff, barW, barH);
+
+            // Gem Count Display (Enemy)
+            if (this.gemCount > 0) {
+                ctx.fillStyle = '#0ff';
+                ctx.font = 'bold 12px Arial';
+                ctx.textAlign = 'right';
+                // Draw diamond shape? Or just text. Text is clearer.
+                ctx.fillText(`♦${this.gemCount}`, this.x + barW / 2 + 20, this.y + yOff + 6);
+            }
         }
     }
 }

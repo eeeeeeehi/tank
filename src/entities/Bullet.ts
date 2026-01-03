@@ -26,6 +26,11 @@ export class Bullet extends Entity {
         this.speed = speed;
         this.damage = damage;
         this.velocity = new Vector2(Math.cos(angle), Math.sin(angle)).scale(this.speed);
+
+        // Auto-scale radius for bosses
+        if (owner && (owner as any).role === 'boss') {
+            this.radius = 10;
+        }
     }
 
     update(dt: number, level: Level, targets?: Entity[]): void {

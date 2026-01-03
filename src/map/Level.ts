@@ -3,10 +3,14 @@ import type { Rect } from '../utils/MathUtils';
 
 export class Level {
     walls: Rect[] = [];
+    width: number;
+    height: number;
 
     constructor(layoutIndex: number = 0, width: number = 800, height: number = 600) {
         // Defines levels
         // In a real app, maybe load JSON. Here, hardcode arrays.
+        this.width = width;
+        this.height = height;
         this.loadLevel(layoutIndex, width, height);
     }
 
@@ -20,8 +24,32 @@ export class Level {
         this.walls.push({ x: w - 20, y: 0, w: 20, h: h }); // Right
 
         if (index === -1) {
-            // Battle Royale: OPEN ARENA
-            // Just the bounds, no obstacles. Max space for 10 tanks.
+            // Battle Royale: Random Obstacles
+            // Spawn ~15-20 random blocks
+            const count = 15;
+            for (let i = 0; i < count; i++) {
+                let wx = 0, wy = 0, ww = 0, wh = 0;
+                // Avoid center area (400-800 x, 300-500 y) roughly
+                let safe = false;
+                let attempts = 0;
+                while (!safe && attempts < 50) {
+                    attempts++;
+                    wx = 50 + Math.random() * (w - 150);
+                    wy = 50 + Math.random() * (h - 150);
+                    ww = 40 + Math.random() * 60;
+                    wh = 40 + Math.random() * 60;
+
+                    // Center check (using actual level width w and height h)
+                    const cx = wx + ww / 2;
+                    const cy = wy + wh / 2;
+                    if (Math.abs(cx - w / 2) > 150 || Math.abs(cy - h / 2) > 150) {
+                        safe = true;
+                    }
+                }
+                if (safe) {
+                    this.walls.push({ x: wx, y: wy, w: ww, h: wh });
+                }
+            }
             return;
         }
 

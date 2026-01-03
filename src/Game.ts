@@ -6,6 +6,7 @@ import { Particle } from './entities/Particle';
 import { SoundManager } from './utils/SoundManager';
 import { checkCircleRectCollision } from './utils/MathUtils';
 import { WeaponDrop } from './entities/WeaponDrop';
+import { Gem } from './entities/Gem';
 
 
 export class Game {
@@ -20,11 +21,20 @@ export class Game {
     bullets: Bullet[] = [];
     particles: Particle[] = [];
     inputBlockTimer: number = 0;
-    drops: WeaponDrop[] = [];
+    drops: (WeaponDrop | Gem)[] = [];
+    starField: { x: number, y: number, size: number, alpha: number }[] = [];
 
 
-    gameState: 'start' | 'playing' | 'win' | 'lose' | 'victory' = 'start';
-    gameMode: 'stage' | 'battleroyale' = 'stage';
+    gameState: 'start' | 'playing' | 'win' | 'lose' | 'victory' | 'levelup' = 'start';
+    gameMode: 'stage' | 'battleroyale' | 'survival' = 'stage';
+
+    // Survival Mode Props
+    playerLevel: number = 1;
+    playerXp: number = 0;
+    nextLevelXp: number = 100;
+    survivalTime: number = 0;
+    survivalBossTimer: number = 0;
+
     spawnBoss(stage: number) {
         const p = this.getSafeSpawnPosition(60);
         if (!p) return;
@@ -32,26 +42,26 @@ export class Game {
         const bossCount = Math.floor(stage / 5); // 1, 2, 3...
 
         // Boss Stats Scaling
-        // 1st Boss: 1500 HP
-        // 2nd Boss: 2500 HP
-        const bossHp = 1000 + bossCount * 500;
+        // Boss Stats Scaling (Nerfed)
+        // 1st Boss: 1200 HP (was 1500)
+        const bossHp = 800 + bossCount * 400;
 
-        const boss = new Tank(p.x, p.y, false, '#333', 250, 40, bossHp, 'shotgun', 1.0, 'boss');
+        const boss = new Tank(p.x, p.y, false, '#333', 250, 40, bossHp, 'shotgun', 3.0, 'boss');
         boss.width = 80;
         boss.height = 80;
 
         // 1st Boss: Lv2 (5-way), Others: Lv3 (7-way)
         boss.weaponLevel = bossCount >= 2 ? 3 : 2;
 
-        // Damage Scaling
-        boss.bulletDamage = 20 + (bossCount - 1) * 5;
+        // Damage Scaling (Buffed)
+        boss.bulletDamage = 25 + bossCount * 5;
 
         boss.speed = 40 + (bossCount * 5); // Slightly faster each time
 
         this.enemies.push(boss);
 
         // Minions Scaling
-        const minionCount = 2 + (bossCount - 1);
+        const minionCount = Math.min(2 + (bossCount - 1), 5);
         for (let i = 0; i < minionCount; i++) {
             this.spawnEnemy(stage);
         }
@@ -136,12 +146,25 @@ export class Game {
         // Keep all scores for "Your Rank is X" logic? 
         // Or trimming? User implies showing rank even if low.
         // Let's keep Top 100 to prevent infinite growth, effectively "Not Ranked" if < 100.
+        // Let's keep Top 100 to prevent infinite growth, effectively "Not Ranked" if < 100.
         if (this.highScores.length > 100) {
             this.highScores = this.highScores.slice(0, 100);
         }
 
-        localStorage.setItem('tank_ranking_stage', JSON.stringify(this.highScores));
+        if (this.gameMode === 'stage') {
+            localStorage.setItem('tank_ranking_stage', JSON.stringify(this.highScores));
+        }
     }
+
+
+
+    // Roulette Props
+    upgradeSelectionIndex: number = 0;
+    menuSelectionIndex: number = 0; // 0: Campaign, 1: BR, 2: Survival
+    rouletteState: 'idle' | 'spinning' | 'result' | 'manual' = 'idle';
+    rouletteTimer: number = 0;
+    rouletteDelay: number = 0.05;
+    rouletteSteps: number = 0;
 
     // Called when moving to next level
     initLevel() {
@@ -215,14 +238,15 @@ export class Game {
         let enemy: Tank;
 
         if (this.gameMode === 'battleroyale') {
-            // Random mix for BR - Nerfed Damage & HP & Fire Rate
-            if (rand < 0.1) enemy = new Tank(ex, ey, false, '#ccc', 200, 5, 30, 'normal', 3.0, 'armored');
-            else if (rand < 0.2) enemy = new Tank(ex, ey, false, '#f80', 200, 5, 15, 'shotgun', 3.0, 'shotgun');
-            else if (rand < 0.3) enemy = new Tank(ex, ey, false, '#ff0', 250, 2, 15, 'normal', 1.0, 'machinegun');
-            else if (rand < 0.4) enemy = new Tank(ex, ey, false, '#0ff', 400, 10, 15, 'normal', 4.0, 'sniper');
-            else if (rand < 0.5) enemy = new Tank(ex, ey, false, '#800', 150, 10, 25, 'normal', 3.0, 'heavy');
-            else if (rand < 0.6) enemy = new Tank(ex, ey, false, '#a0f', 300, 5, 15, 'normal', 2.0, 'dasher');
-            else enemy = new Tank(ex, ey, false, undefined, 150, 5, 15); // Default Weak
+            // Random mix for BR - Buffed HP for long fights (~100-200)
+            // Color, speed, damage, HP, role, cooldown, role
+            if (rand < 0.1) enemy = new Tank(ex, ey, false, '#ccc', 200, 10, 200, 'normal', 3.0, 'armored');
+            else if (rand < 0.2) enemy = new Tank(ex, ey, false, '#f80', 200, 15, 100, 'shotgun', 2.0, 'shotgun');
+            else if (rand < 0.3) enemy = new Tank(ex, ey, false, '#ff0', 250, 5, 100, 'normal', 0.5, 'machinegun');
+            else if (rand < 0.4) enemy = new Tank(ex, ey, false, '#0ff', 400, 20, 100, 'normal', 3.0, 'sniper');
+            else if (rand < 0.5) enemy = new Tank(ex, ey, false, '#800', 150, 15, 150, 'normal', 2.5, 'heavy');
+            else if (rand < 0.6) enemy = new Tank(ex, ey, false, '#a0f', 300, 10, 100, 'normal', 1.5, 'dasher');
+            else enemy = new Tank(ex, ey, false, '#f00', 200, 10, 100, 'normal', 2.0, undefined); // Standard
         } else {
             // Stage Progression Logic
             if (difficultyLevel >= 5 && rand < 0.15) {
@@ -259,6 +283,28 @@ export class Game {
         requestAnimationFrame((time) => this.loop(time));
     }
 
+    getLevelForXp(level: number) {
+        // Simple exponential curve: 100, 120, 144...
+        return Math.floor(100 * Math.pow(1.2, level - 1));
+    }
+
+    gainXp(amount: number) {
+        this.playerXp += amount;
+        // Check Level Up
+        if (this.gameMode === 'survival' && this.playerXp >= this.nextLevelXp) {
+            this.playerLevel++;
+            this.playerXp -= this.nextLevelXp;
+            // Steeper curve: 1.5 multiplier
+            this.nextLevelXp = Math.floor(this.nextLevelXp * 1.5);
+
+            this.gameState = 'levelup'; // Pauses game, preserves enemies
+            this.soundManager.playExplosion(); // Celebration sound?
+            this.generateUpgrades();
+            this.updateUI();
+        }
+        this.updateHUD();
+    }
+
     loop(time: number) {
         const deltaTime = (time - this.lastTime) / 1000;
         this.lastTime = time;
@@ -278,6 +324,16 @@ export class Game {
     update(dt: number) {
         this.input.update(); // Poll Gamepads
 
+        if (this.countdownTimer > 0) {
+            this.countdownTimer -= dt;
+            if (this.countdownTimer <= 0) {
+                this.countdownTimer = 0;
+                this.soundManager.playShoot(); // GO!
+            } else {
+                return; // Freeze game during countdown
+            }
+        }
+
         // Update Drops
         for (let i = this.drops.length - 1; i >= 0; i--) {
             const drop = this.drops[i];
@@ -286,11 +342,51 @@ export class Game {
                 this.drops.splice(i, 1);
                 continue;
             }
+
+            // Check Collision with Player
+            // Hit detection (Player)
             if (this.player.hp > 0 && Math.abs(this.player.x - drop.x) < 30 && Math.abs(this.player.y - drop.y) < 30) {
-                this.applyWeaponUpgrade(drop.role);
-                this.soundManager.playShoot();
+                if (drop instanceof Gem) {
+                    if (drop.type === 'xp') {
+                        this.gainXp(drop.value);
+                        this.spawnFloatingText(this.player.x, this.player.y - 40, `+${drop.value} XP`, '#ff0');
+                    } else {
+                        // Power Gem (BR)
+                        this.player.collectGem(drop.value);
+                        this.spawnFloatingText(this.player.x, this.player.y - 40, `POWER UP! (+${drop.value})`, '#0ff');
+                    }
+                } else if (drop instanceof WeaponDrop) {
+                    this.applyWeaponUpgrade(drop.role, this.player);
+                }
+                this.soundManager.playShoot(); // Pickup sound
                 drop.active = false;
                 this.drops.splice(i, 1);
+                this.updateHUD(); // Update Gem UI
+                continue;
+            }
+
+            // Enemey Pickups (BR)
+            if (this.gameMode === 'battleroyale') {
+                for (const enemy of this.enemies) {
+                    if (enemy.hp > 0 && Math.abs(enemy.x - drop.x) < 30 && Math.abs(enemy.y - drop.y) < 30) {
+                        if (drop instanceof Gem) {
+                            if (drop.type === 'xp') {
+                                // Enemies don't collect XP? Or do they level up too?
+                                // Let's disable enemy XP pickup for now to keep it simple, or let them steal it?
+                                // User: "picked up ... experience" -> typically player only.
+                            } else {
+                                enemy.collectGem(drop.value);
+                            }
+                            // Visual prompt?
+                        } else if (drop instanceof WeaponDrop) {
+                            this.applyWeaponUpgrade(drop.role, enemy);
+                        }
+                        this.soundManager.playShoot();
+                        drop.active = false;
+                        this.drops.splice(i, 1);
+                        break;
+                    }
+                }
             }
         }
 
@@ -364,12 +460,24 @@ export class Game {
             }
 
             // Input to Start (Blocked for short time after return)
+            // Input to Start (Blocked for short time after return)
             if (this.inputBlockTimer <= 0) {
-                if (this.input.isDown('Space') || this.input.isDown('Enter') || this.input.gamepadShoot) {
-                    this.startGame('stage');
-                }
-                if (this.input.isDown('KeyB')) {
-                    this.startGame('battleroyale');
+                const isUp = this.input.isDown('ArrowUp') || this.input.axisLeft.y < -0.5 || this.input.isDown('KeyW');
+                const isDown = this.input.isDown('ArrowDown') || this.input.axisLeft.y > 0.5 || this.input.isDown('KeyS');
+                const isConfirm = this.input.isDown('Space') || this.input.isDown('Enter') || this.input.gamepadShoot || this.input.isDown('KeyZ') || this.input.isDown('KeyX');
+
+                if (isUp) {
+                    this.menuSelectionIndex = (this.menuSelectionIndex - 1 + 3) % 3;
+                    this.inputBlockTimer = 0.2;
+                    this.updateUI();
+                } else if (isDown) {
+                    this.menuSelectionIndex = (this.menuSelectionIndex + 1) % 3;
+                    this.inputBlockTimer = 0.2;
+                    this.updateUI();
+                } else if (isConfirm) {
+                    if (this.menuSelectionIndex === 0) this.startGame('stage');
+                    else if (this.menuSelectionIndex === 1) this.startGame('battleroyale');
+                    else if (this.menuSelectionIndex === 2) this.startGame('survival');
                 }
             }
             return;
@@ -393,38 +501,125 @@ export class Game {
                 }
             }
 
+            // Roulette & Manual Logic
             const isLeft = this.input.isDown('ArrowLeft') || this.input.axisLeft.x < -0.5;
             const isRight = this.input.isDown('ArrowRight') || this.input.axisLeft.x > 0.5;
             const isConfirm = this.input.isDown('Space') || this.input.isDown('Enter') || this.input.gamepadShoot;
 
-            if (isLeft && this.inputBlockTimer <= 0) {
-                this.upgradeSelectionIndex = (this.upgradeSelectionIndex - 1 + this.upgradeOptions.length) % this.upgradeOptions.length;
-                this.inputBlockTimer = 0.2; // Input debounce
-                this.updateUI(); // Re-render to show selection
-            }
-            if (isRight && this.inputBlockTimer <= 0) {
-                this.upgradeSelectionIndex = (this.upgradeSelectionIndex + 1) % this.upgradeOptions.length;
-                this.inputBlockTimer = 0.2; // Input debounce
-                this.updateUI();
-            }
-            if (isConfirm && this.inputBlockTimer <= 0) {
-                if (this.gameState === 'win') {
-                    this.selectUpgrade(this.upgradeSelectionIndex);
-                } else if (this.gameState === 'victory' || this.gameState === 'lose') {
+            if (this.gameState === 'win') {
+                if (this.rouletteState === 'manual') {
+                    // Manual Selection (Boss Reward)
+                    if (isLeft && this.inputBlockTimer <= 0) {
+                        this.upgradeSelectionIndex = (this.upgradeSelectionIndex - 1 + this.upgradeOptions.length) % this.upgradeOptions.length;
+                        this.inputBlockTimer = 0.2;
+                        this.updateUI();
+                    }
+                    if (isRight && this.inputBlockTimer <= 0) {
+                        this.upgradeSelectionIndex = (this.upgradeSelectionIndex + 1) % this.upgradeOptions.length;
+                        this.inputBlockTimer = 0.2;
+                        this.updateUI();
+                    }
+                    if (isConfirm && this.inputBlockTimer <= 0) {
+                        this.selectUpgrade(this.upgradeSelectionIndex);
+                    }
+                } else if (this.rouletteState === 'idle') {
+                    if (isConfirm && this.inputBlockTimer <= 0) {
+                        this.rouletteState = 'spinning';
+                        this.rouletteDelay = 0.05; // Fast start
+                        this.rouletteSteps = 20 + Math.floor(Math.random() * 10); // Random stops
+                        this.rouletteTimer = 0;
+                        this.soundManager.playShoot(); // Start sound
+                        this.updateUI();
+                    }
+                } else if (this.rouletteState === 'spinning') {
+                    this.rouletteTimer += dt;
+                    if (this.rouletteTimer >= this.rouletteDelay) {
+                        this.rouletteTimer = 0;
+                        this.upgradeSelectionIndex = (this.upgradeSelectionIndex + 1) % this.upgradeOptions.length;
+                        this.rouletteSteps--;
+
+                        // Play tick sound (reuse shoot low pitch?)
+                        // this.soundManager.playShoot(); 
+
+                        // Slow down
+                        if (this.rouletteSteps < 10) {
+                            this.rouletteDelay *= 1.2; // Exponential slow down
+                        }
+
+                        if (this.rouletteSteps <= 0) {
+                            this.rouletteState = 'result';
+                            this.soundManager.playExplosion(); // Win sound (boom!)
+
+                            // Auto-select after short delay
+                            setTimeout(() => {
+                                this.selectUpgrade(this.upgradeSelectionIndex);
+                            }, 1500);
+                        }
+                        this.updateUI();
+                    }
+                }
+            } else if (isConfirm && this.inputBlockTimer <= 0) {
+                // Classic Victory/Lose confirm
+                if (this.gameState === 'victory' || this.gameState === 'lose') {
                     this.firstNameScreen();
+                }
+            }
+
+            // Level Up Selection
+            if (this.gameState === 'levelup') {
+                if (isLeft && this.inputBlockTimer <= 0) {
+                    this.upgradeSelectionIndex = (this.upgradeSelectionIndex - 1 + this.upgradeOptions.length) % this.upgradeOptions.length;
+                    this.inputBlockTimer = 0.2;
+                    this.updateUI();
+                }
+                if (isRight && this.inputBlockTimer <= 0) {
+                    this.upgradeSelectionIndex = (this.upgradeSelectionIndex + 1) % this.upgradeOptions.length;
+                    this.inputBlockTimer = 0.2;
+                    this.updateUI();
+                }
+                if (isConfirm && this.inputBlockTimer <= 0) {
+                    this.selectUpgrade(this.upgradeSelectionIndex);
+                    // Resume game
+                    this.gameState = 'playing';
+                    this.inputBlockTimer = 0.5;
                 }
             }
             return;
         }
 
-        // Battle Royale Countdown
-        if (this.countdownTimer > 0) {
-            this.countdownTimer -= dt;
-            if (this.countdownTimer <= 0) {
-                this.countdownTimer = 0;
-                // Maybe play sound?
-            } else {
-                return; // Block gameplay
+        // Survival Mode Logic
+        if (this.gameMode === 'survival' && this.gameState === 'playing') {
+            this.survivalTime += dt;
+            this.survivalBossTimer += dt;
+
+            // Boss Every 1 minute (60s)
+            if (this.survivalBossTimer >= 60) {
+                this.survivalBossTimer = 0;
+                this.spawnSurvivalBoss();
+                this.spawnFloatingText(this.player.x, this.player.y - 100, 'WARNING: BOSS!', '#f00');
+            }
+
+            // Infinite Enemy Spawning
+            // Horde Mode: Start fast (1.0s), ramp to swarm (0.05s) over 3 mins (180s)
+            // Even Faster
+            const spawnRate = Math.max(0.05, 0.5 - (this.survivalTime / 180) * 0.45);
+
+            if (Math.random() < dt / spawnRate) {
+                // High Cap for Horde Feel (200)
+                if (this.enemies.length < 200) {
+                    this.spawnSurvivalEnemy();
+                }
+            }
+        }
+
+        // Periodic Gem Spawn in BR
+        if (this.gameMode === 'battleroyale' && this.gameState === 'playing') {
+            // Spawn 1 gem every 3 seconds roughly
+            if (Math.random() < dt / 3.0) {
+                const dropPos = this.getSafeSpawnPosition(30);
+                if (dropPos) {
+                    this.drops.push(new Gem(dropPos.x, dropPos.y));
+                }
             }
         }
 
@@ -439,11 +634,11 @@ export class Game {
         const playerInput = this.inputBlockTimer > 0 ? undefined : this.input;
         const allTanks = [this.player, ...this.enemies]; // All potential obstacles
 
-        this.player.update(dt, playerInput, this.level, this.bullets, undefined, allTanks);
+        this.player.update(dt, playerInput, this.level, this.bullets, undefined, allTanks, this.drops);
 
         // Update Enemies
         for (const enemy of this.enemies) {
-            enemy.update(dt, null, this.level, this.bullets, this.gameMode === 'battleroyale' ? allTanks : [this.player], allTanks);
+            enemy.update(dt, null, this.level, this.bullets, this.gameMode === 'battleroyale' ? allTanks : [this.player], allTanks, this.drops);
         }
 
         // Sound check for New Bullets
@@ -458,6 +653,12 @@ export class Game {
             if (!b.active) {
                 this.bullets.splice(i, 1);
             }
+        }
+
+        // Check for Return to Home
+        if (this.input.isDown('Escape') || (this.input.activeInputType === 'gamepad' && navigator.getGamepads()[0]?.buttons[8].pressed)) {
+            this.goToTitle();
+            return;
         }
 
         // Remove inactive bullets post-collision
@@ -530,7 +731,16 @@ export class Game {
                         this.spawnExplosion(enemy.x, enemy.y, enemy.color, 50, true);
                         this.triggerShake(0.3, 5);
 
-                        // Drops removed as per request (Moved to upgrades)
+                        // Drop Gems (Base 1 + Held Gems)
+                        if (this.gameMode === 'battleroyale') {
+                            const totalGems = 1 + enemy.gemCount;
+                            // Scatter them slightly
+                            for (let k = 0; k < totalGems; k++) {
+                                const gx = enemy.x + (Math.random() - 0.5) * 40;
+                                const gy = enemy.y + (Math.random() - 0.5) * 40;
+                                this.drops.push(new Gem(gx, gy, 1)); // 1 value gems
+                            }
+                        }
 
                         this.enemies.splice(j, 1);
 
@@ -550,6 +760,16 @@ export class Game {
                         this.spawnExplosion(enemy.x, enemy.y, '#fff', 10, false);
                     }
 
+                    if (dead && this.gameMode === 'survival') {
+                        // XP Drop (Physical item now)
+                        // Fast Leveling: Base 30
+                        const xpVal = 30 + Math.floor(this.survivalTime / 30);
+                        // Drop XP Gem
+                        const drop = new Gem(enemy.x, enemy.y, xpVal);
+                        drop.type = 'xp'; // Need to add type to Gem or just handle by mode
+                        this.drops.push(drop);
+                    }
+
                     this.updateHUD();
                     break;
                 }
@@ -558,11 +778,20 @@ export class Game {
     }
 
     firstNameScreen() {
+        this.goToTitle();
+    }
+
+    goToTitle() {
         this.gameState = 'start';
-        this.canvas.width = 800;
+        this.enemies = []; // Clear enemies
+        this.bullets = [];
+        this.particles = [];
+        this.canvas.width = 800; // Reset Canvas
         this.canvas.height = 600;
+        this.menuSelectionIndex = 0;
         this.inputBlockTimer = 0.5;
         this.updateUI();
+        this.updateHUD(); // Reset HUD
     }
 
     updateHUD() {
@@ -581,8 +810,51 @@ export class Game {
         if (hudStage) {
             if (this.gameMode === 'battleroyale') {
                 hudStage.innerText = `生存数: ${this.enemies.length + (this.player.hp > 0 ? 1 : 0)}`;
+            } else if (this.gameMode === 'survival') {
+                // Time format MM:SS
+                const m = Math.floor(this.survivalTime / 60);
+                const s = Math.floor(this.survivalTime % 60);
+                hudStage.innerText = `Time: ${m}:${s.toString().padStart(2, '0')}`;
             } else {
                 hudStage.innerText = `ステージ: ${this.currentLevelIdx + 1}`;
+            }
+        }
+
+        // Show Player Gems in BR
+        if (this.gameMode === 'battleroyale' && hudHpBar) {
+            // Create or update Gem Counter overlay
+            let gemUI = document.getElementById('hud-gem-counter');
+            if (!gemUI) {
+                gemUI = document.createElement('div');
+                gemUI.id = 'hud-gem-counter';
+                gemUI.style.position = 'absolute';
+                gemUI.style.top = '10px';
+                gemUI.style.left = '320px'; // Right of HP bar
+                gemUI.style.color = '#0ff';
+                gemUI.style.fontWeight = 'bold';
+                gemUI.style.fontSize = '20px';
+                gemUI.style.textShadow = '2px 2px 2px #000';
+                document.body.appendChild(gemUI);
+            }
+            gemUI.style.display = 'block';
+            gemUI.innerText = `♦ ${this.player.gemCount}`;
+        } else {
+            const gemUI = document.getElementById('hud-gem-counter');
+            if (gemUI) gemUI.style.display = 'none';
+        }
+
+        const hudXpContainer = document.getElementById('hud-xp-container');
+        const hudXpBar = document.getElementById('hud-xp-bar');
+        const hudLevel = document.getElementById('hud-level');
+
+        if (hudXpContainer && hudXpBar && hudLevel) {
+            if (this.gameMode === 'survival') {
+                hudXpContainer.style.display = 'block';
+                const xpPct = Math.min(100, (this.playerXp / this.nextLevelXp) * 100);
+                hudXpBar.style.width = `${xpPct}%`;
+                hudLevel.innerText = `LV. ${this.playerLevel}`;
+            } else {
+                hudXpContainer.style.display = 'none';
             }
         }
 
@@ -599,9 +871,9 @@ export class Game {
         }
     }
 
-    getSafeSpawnPosition(radius: number): { x: number, y: number } {
-        const w = this.canvas.width;
-        const h = this.canvas.height;
+    getSafeSpawnPosition(radius: number, avoidEntities: { x: number, y: number }[] = []): { x: number, y: number } {
+        const w = this.level ? this.level.width : this.canvas.width;
+        const h = this.level ? this.level.height : this.canvas.height;
         // Try up to 100 times to find a spot not overlapping walls
         for (let i = 0; i < 100; i++) {
             const x = 50 + Math.random() * (w - 100);
@@ -609,18 +881,91 @@ export class Game {
 
             let safe = true;
             // Check Walls
-            for (const wall of this.level.walls) {
-                if (checkCircleRectCollision({ x, y, r: radius + 5 }, wall)) {
-                    safe = false;
-                    break;
+            if (this.level) {
+                for (const wall of this.level.walls) {
+                    if (checkCircleRectCollision({ x, y, r: radius + 5 }, wall)) {
+                        safe = false;
+                        break;
+                    }
                 }
             }
+
+            // Check Entity Avoidance (Min distance)
+            if (safe && avoidEntities.length > 0) {
+                for (const e of avoidEntities) {
+                    const dist = Math.sqrt((e.x - x) ** 2 + (e.y - y) ** 2);
+                    if (dist < 300) { // Keep 300px away
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+
             if (safe) return { x, y };
         }
-        return { x: 400, y: 300 }; // Fallback
+        return { x: w / 2, y: h / 2 }; // Fallback
     }
 
-    startGame(mode: 'stage' | 'battleroyale') {
+    spawnSurvivalEnemy() {
+        // Avoid Player (Spawn closer for action, but offscreen-ish)
+        // Spawn ring: 500 to 900
+        const p = this.getSafeSpawnPosition(30);
+        const dist = Math.sqrt((p.x - this.player.x) ** 2 + (p.y - this.player.y) ** 2);
+
+        // Enforce Ring
+        if (dist < 400 || dist > 900) {
+            // Too close or too far
+            return;
+        }
+
+        // Scale difficulty with time
+        // Every 60s, tier increases?
+        const tier = Math.floor(this.survivalTime / 60) + 1;
+
+        let enemy: Tank;
+        // removed unused 'r'
+
+        // Random types based on tier
+        // Random types based on tier
+        // Scaling Logic
+        const baseSpeed = 100 + tier * 10; // Faster over time
+        const baseDamage = 5 + tier * 2; // Harder hits
+        const baseFireRate = Math.max(0.5, 3.0 - tier * 0.2); // Shoot faster
+
+        if (Math.random() < 0.1 * tier) {
+            // Harder enemies appear more often
+            enemy = new Tank(p.x, p.y, false, '#f0f', baseSpeed * 1.5, baseDamage * 2, 30 + tier * 5, 'shotgun', baseFireRate, 'shotgun');
+        } else {
+            const hp = 15 + tier * 2;
+            enemy = new Tank(p.x, p.y, false, '#f00', baseSpeed, baseDamage, hp, 'normal', baseFireRate);
+        }
+        this.enemies.push(enemy);
+    }
+
+    spawnSurvivalBoss() {
+        const p = this.getSafeSpawnPosition(60);
+        const types = ['tank', 'speed', 'spread'] as const;
+        const type = types[Math.floor(Math.random() * types.length)];
+
+        const tier = Math.floor(this.survivalTime / 120) + 1;
+        const hp = 1000 + tier * 500;
+
+        let boss: Tank;
+
+        if (type === 'tank') {
+            boss = new Tank(p.x, p.y, false, '#500', 100, 30, hp * 1.5, 'heavy', 3.0, 'heavy');
+            boss.width = 100; boss.height = 100;
+        } else if (type === 'speed') {
+            boss = new Tank(p.x, p.y, false, '#90f', 300, 15, hp * 0.8, 'machinegun', 1.0, 'dasher');
+            boss.width = 60; boss.height = 60;
+        } else {
+            boss = new Tank(p.x, p.y, false, '#fa0', 200, 20, hp, 'shotgun', 2.0, 'shotgun');
+            boss.width = 80; boss.height = 80;
+        }
+        this.enemies.push(boss);
+    }
+
+    startGame(mode: 'stage' | 'battleroyale' | 'survival') {
         this.gameMode = mode;
         this.gameState = 'playing';
         this.drops = [];
@@ -632,21 +977,22 @@ export class Game {
         this.acquiredSkills = [];
 
         if (mode === 'battleroyale') {
-            this.canvas.width = 1200;
-            this.canvas.height = 800;
+            this.canvas.width = 800; // Small Viewport
+            this.canvas.height = 600;
 
-            this.player.maxHp = 20; // Hardcore but scaled
-            this.player.hp = 20;
+            this.player.maxHp = 100; // Same as Campaign
+            this.player.hp = 100;
             this.player.invincibleTimer = 1.5;
 
             this.currentLevelIdx = 0;
-            // Load Level -1 for BR Arena
-            this.level = new Level(-1, 1200, 800);
+            // Load Level -1 for BR Arena (Much Larger)
+            this.level = new Level(-1, 2000, 1500);
 
             this.countdownTimer = 3; // Start Countdown
 
             this.bullets = [];
             this.particles = [];
+            this.drops = [];
 
             // Spawn Player Safe
             const pSpawn = this.getSafeSpawnPosition(15);
@@ -654,12 +1000,86 @@ export class Game {
             this.player.y = pSpawn.y;
             // hp already set
 
-            // Spawn 9 Enemies Safe
+            // Spawn 9 Enemies Safe (Avoid Player and each other)
             this.enemies = [];
             for (let i = 0; i < 9; i++) {
-                this.spawnEnemy(99); // Max difficulty mix
+                // Gather existing entities to avoid from
+                const existing = [this.player, ...this.enemies];
+                // Modified spawnEnemy to use getSafeSpawnPosition with avoidance
+                // But spawnEnemy calls getSafeSpawnPosition internally without args in current implementation.
+                // We need to refactor spawnEnemy or manually spawn here.
+                // Converting spawnEnemy to take override position or just manual here.
+                // Manual spawn for BR init to ensure distribution.
+
+                const pos = this.getSafeSpawnPosition(15, existing);
+
+                // Random Enemy
+                let enemy: Tank;
+                // Random Tier logic from spawnEnemy?
+                // BR Logic: Random loadouts
+                const randRole = Math.random();
+                let role: any = 'standard';
+                if (randRole < 0.2) role = 'sniper';
+                else if (randRole < 0.4) role = 'shotgun';
+                else if (randRole < 0.6) role = 'machinegun';
+                else if (randRole < 0.8) role = 'dasher';
+
+                enemy = new Tank(pos.x, pos.y, false, undefined, 150, 5, 100, role === 'shotgun' ? 'shotgun' : 'normal', 0.5, role);
+                // Random Color
+                const hue = Math.floor(Math.random() * 360);
+                enemy.color = `hsl(${hue}, 70%, 50%)`;
+
+                this.enemies.push(enemy);
             }
+
+            // Spawn Random Gems
+            const gemCount = 10;
+            for (let i = 0; i < gemCount; i++) {
+                const dropPos = this.getSafeSpawnPosition(30);
+                if (dropPos) {
+                    this.drops.push(new Gem(dropPos.x, dropPos.y));
+                }
+            }
+
             this.playerIndicatorTimer = 3.0;
+        } else if (mode === 'survival') {
+            this.canvas.width = 800; // Viewport
+            this.canvas.height = 600; // Viewport
+            this.level = new Level(-1, 3000, 2000); // Huge Arena, no obstacles
+
+            this.player.maxHp = 100;
+            this.player.hp = 100;
+            this.playerLevel = 1;
+            this.playerXp = 0;
+            this.nextLevelXp = 50; // Start fast
+            this.survivalTime = 0;
+            this.survivalBossTimer = 0;
+
+            // Generate Star Field for Parallax/Movement sense
+            this.starField = [];
+            for (let i = 0; i < 300; i++) {
+                this.starField.push({
+                    x: Math.random() * 3000,
+                    y: Math.random() * 2000,
+                    size: Math.random() * 3 + 1,
+                    alpha: Math.random() * 0.5 + 0.1
+                });
+            }
+
+            // Spawn Player Center
+            this.player.x = 1500;
+            this.player.y = 1000;
+
+            this.enemies = []; // Start empty, spawn gradually
+
+            // Grant 1 Starter Skill
+            this.generateUpgrades(); // Generate
+            // Auto-pick random or let user pick? User request says "One skill".
+            // Let's open the selection screen immediately?
+            // "一番最初に一つだけスキル獲得できる" -> "Can acquire one skill at the very beginning".
+            // So we transition to 'levelup' state immediately.
+            this.gameState = 'levelup';
+            this.inputBlockTimer = 0.5;
         } else {
             this.player.maxHp = 100; // Scaled HP
             this.player.hp = 100;
@@ -692,9 +1112,24 @@ export class Game {
 
     // Upgrade System
     upgradeOptions: { id: string, label: string, description: string, apply: (t: Tank) => void }[] = [];
-    upgradeSelectionIndex: number = 0;
+
+
+
+
+    // ... items ...
 
     generateUpgrades() {
+        const stage = this.currentLevelIdx + 1;
+
+        // 5の倍数ステージ（ボス戦後）ならマニュアル選択、それ以外はルーレット
+        // Survival Mode is always manual selection (XP level up)
+        if (this.gameMode === 'survival' || (stage % 5 === 0 && this.gameMode === 'stage')) {
+            this.rouletteState = 'manual';
+        } else {
+            this.rouletteState = 'idle';
+        }
+
+        this.inputBlockTimer = 0.5; // Prevent instant spin/select
         const potentialUpgrades = [
             {
                 id: 'firerate',
@@ -771,12 +1206,20 @@ export class Game {
             if (this.player.hp < this.player.maxHp) this.player.hp++;
 
             // Next level
-            this.currentLevelIdx++;
-            this.initLevel();
-            this.gameState = 'playing';
+            // Next level logic
+            if (this.gameMode === 'survival') {
+                // Survival: Just resume
+                this.gameState = 'playing';
+            } else {
+                // Stage Mode: Next Level
+                this.currentLevelIdx++;
+                this.initLevel();
+                this.gameState = 'playing';
+            }
             this.updateUI();
             this.updateHUD();
         }
+
     }
 
     updateUI() {
@@ -789,34 +1232,89 @@ export class Game {
 
         let html = '';
         if (this.gameState === 'start') {
-            html += '<h1>タンクバトル</h1><p>[SPACE/ボタン] キャンペーンモード</p><p>[B] バトルロイヤル (生存戦)</p>';
+            html += '<h1>タンクバトル</h1>';
+
+            const modes = [
+                { label: 'ステージモード', desc: '無限ステージ (5面毎にボス)' },
+                { label: 'バトルロイヤル', desc: '最後の1人になるまで戦え' },
+                { label: 'サバイバル', desc: '無限に湧く敵と戦い強化せよ' }
+            ];
+
+            modes.forEach((m, i) => {
+                const isSelected = i === this.menuSelectionIndex;
+                const color = isSelected ? '#0f0' : '#888';
+                const cursor = isSelected ? '▶ ' : '&nbsp;&nbsp;';
+                const bg = isSelected ? 'rgba(0, 255, 0, 0.1)' : 'transparent';
+
+                html += `<div style="padding: 10px; margin: 5px; background: ${bg}; border-radius: 5px; color: ${color};">
+                            <span style="font-size: 1.2em; font-weight: bold;">${cursor}${m.label}</span><br>
+                            <span style="font-size: 0.8em; margin-left: 20px;">${m.desc}</span>
+                         </div>`;
+            });
+
+            html += '<p style="margin-top:20px; color:#aaa; font-size:0.8em;">[↑↓] 選択  [SPACE/ボタン] 決定</p>';
+
             this.renderRanking(ui, html); // Helper to append Ranking
             ui.style.display = 'flex';
         } else if (this.gameState === 'playing') {
             ui.style.display = 'none';
-        } else if (this.gameState === 'win') {
-            html += `<h1>ステージ ${this.currentLevelIdx + 1} クリア！</h1>
-                     <p>能力を選択:</p>
-                     <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">`;
+        } else if (this.gameState === 'win' || this.gameState === 'levelup') {
+            if (this.gameState === 'win') {
+                html += `<h1>ステージ ${this.currentLevelIdx + 1} クリア！</h1>`;
+            } else {
+                html += `<h1>LEVEL UP! (LV.${this.playerLevel})</h1>`;
+            }
 
-            this.upgradeOptions.forEach((up, i) => {
-                const isSelected = i === this.upgradeSelectionIndex;
-                const border = isSelected ? '4px solid #fff' : '2px solid #0f0';
+            // Shared Upgrade Selection UI
+            if (this.rouletteState === 'manual' || this.gameState === 'levelup') {
+                // MANUAL MODE (Boss Reward / Level Up) - Classic Button Grid
+                html += `<p style="color: #0ff; margin-bottom: 20px;">CHOOSE YOUR UPGRADE!</p>
+                         <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">`;
 
+                this.upgradeOptions.forEach((up, i) => {
+                    const isSelected = i === this.upgradeSelectionIndex;
+                    const border = isSelected ? '4px solid #fff' : '2px solid #0f0';
+                    const bg = isSelected ? '#555' : '#222';
+                    const transform = isSelected ? 'scale(1.1)' : 'scale(1.0)';
 
-                // Dim if blocked
-                const opacity = this.inputBlockTimer > 0 ? '0.7' : '1.0';
+                    html += `<button id="upg-${i}" style="pointer-events: auto; padding: 15px 25px; font-size: 16px; background: ${bg}; border: ${border}; color: #fff; cursor: pointer; transform: ${transform}; transition: all 0.1s; border-radius: 8px;">
+                                <div style="font-weight:bold; color: #0f0;">${up.label}</div>
+                                <div style="font-size: 12px; color: #aaa;">${up.description}</div>
+                             </button>`;
+                });
+                html += `</div>`;
 
-                const transform = isSelected ? 'scale(1.1)' : 'scale(1.0)';
-                // Brighter colors
-                const finalBg = isSelected ? '#555' : '#222';
+            } else {
+                // ROULETTE MODE - Vertical Slot Style
+                // Show a single large box that changes content
+                const currentItem = this.upgradeOptions[this.upgradeSelectionIndex];
 
-                html += `<button id="upg-${i}" style="pointer-events: auto; padding: 10px 20px; font-size: 16px; background: ${finalBg}; border: ${border}; color: #fff; cursor: pointer; transform: ${transform}; transition: all 0.1s; opacity: ${opacity};">
-                            <div style="font-weight:bold; color: #0f0;">${up.label}</div>
-                            <div style="font-size: 12px; color: #aaa;">${up.description}</div>
-                         </button>`;
-            });
-            html += `</div>`;
+                // Visual determination
+                let borderColor = '#0f0';
+                let labelColor = '#fff';
+                let animClass = '';
+
+                if (this.rouletteState === 'result') {
+                    borderColor = '#ff0';
+                    labelColor = '#ff0';
+                    animClass = 'animation: pulse 0.2s infinite;'; // Excite on win
+                } else if (this.rouletteState === 'spinning') {
+                    // Blur effect or just rapid switch
+                }
+
+                html += `<div style="margin-top: 20px; display: flex; flex-direction: column; align-items: center;">
+                            <div style="width: 300px; height: 150px; background: #000; border: 10px solid ${borderColor}; border-radius: 15px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 0 20px ${borderColor}; ${animClass}">
+                                <div style="font-size: 32px; font-weight: bold; color: ${labelColor}; margin-bottom: 10px;">${currentItem.label}</div>
+                                <div style="font-size: 18px; color: #ccc;">${currentItem.description}</div>
+                            </div>
+                         </div>`;
+
+                if (this.rouletteState === 'idle') {
+                    html += `<p style="margin-top: 30px; color: #0f0; font-size: 24px; animation: flash 1s infinite;">PRESS SPACE TO SPIN!</p>`;
+                } else if (this.rouletteState === 'result') {
+                    html += `<p style="margin-top: 30px; color: #ff0; font-size: 32px; font-weight: bold;">GET!</p>`;
+                }
+            }
 
             ui.innerHTML = html;
             ui.style.display = 'flex';
@@ -837,6 +1335,10 @@ export class Game {
         } else if (this.gameState === 'lose') {
             if (this.gameMode === 'battleroyale') {
                 html += `<h1>敗北...</h1><p>次は頑張ろう！</p><p>[SPACE/ボタン] で戻る</p>`;
+            } else if (this.gameMode === 'survival') {
+                const m = Math.floor(this.survivalTime / 60);
+                const s = Math.floor(this.survivalTime % 60);
+                html += `<h1>GAME OVER</h1><p>生存時間: ${m}分 ${s}秒</p><p>Level: ${this.playerLevel}</p><p>[SPACE/ボタン] でリトライ</p>`;
             } else {
                 const stage = this.currentLevelIdx + 1;
                 html += `<h1>ゲームオーバー</h1><p>到達ステージ: ${stage}</p><p>[SPACE/ボタン] でリトライ</p>`;
@@ -934,7 +1436,12 @@ export class Game {
 
     draw() {
         // Clear with dark background
-        this.ctx.fillStyle = '#050510'; // Deep blue-black
+        // Clear with dark background
+        if (this.gameMode === 'survival') {
+            this.ctx.fillStyle = '#100020'; // Deep Space Purple
+        } else {
+            this.ctx.fillStyle = '#050510'; // Deep Blue-Black
+        }
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         this.ctx.save();
@@ -946,31 +1453,77 @@ export class Game {
             this.ctx.translate(dx, dy);
         }
 
+        // -- Star Field (Survival) --
+        if (this.gameMode === 'survival') {
+            this.ctx.fillStyle = '#fff';
+            for (const s of this.starField) {
+                this.ctx.globalAlpha = s.alpha;
+                this.ctx.fillRect(s.x, s.y, s.size, s.size);
+            }
+            this.ctx.globalAlpha = 1.0;
+        }
+
         // -- Cyber Grid Background --
         this.ctx.lineWidth = 1;
         this.ctx.strokeStyle = 'rgba(0, 255, 255, 0.1)'; // Faint Cyan
         this.ctx.shadowBlur = 0;
 
         const gridSize = 40;
+
+        // Offset Grid by Camera
+        // If NO Camera (Survival/Stage), we are centered or fixed.
+        // Wait, current logic:
+        // BR/Survival: Camera logic translates CTX.
+        // Stage: No camera.
+
+        // ISSUE: If CTX is translated, drawing Grid at 0,0 is wrong because it moves with camera.
+        // We want grid to cover the WORLD.
+        // OR better: Draw Grid relative to camera using modulo to simulate infinite scrolling floor?
+        // But Survival is now FIXED CAMERA (1200x800) again? Or did we keep camera 3000x2000?
+        // Last step we changed Survival to 3000x2000 with camera.
+        // So standard world drawing works if we draw world-sized grid?
+
+        // But for "feeling of movement", a static grid on a static floor is fine IF the camera moves.
+        // But the user says " doesn't feel like moving". Maybe the floor is too plain?
+        // Let's draw the grid covering the ENTIRE world area.
+
+        const worldW = (this.gameMode === 'survival') ? 3000 : (this.gameMode === 'battleroyale' ? 2000 : this.canvas.width);
+        const worldH = (this.gameMode === 'survival') ? 2000 : (this.gameMode === 'battleroyale' ? 1500 : this.canvas.height);
+
         this.ctx.beginPath();
         // Vertical
-        for (let x = 0; x <= this.canvas.width; x += gridSize) {
+        for (let x = 0; x <= worldW; x += gridSize) {
             this.ctx.moveTo(x, 0);
-            this.ctx.lineTo(x, this.canvas.height);
+            this.ctx.lineTo(x, worldH);
         }
         // Horizontal
-        for (let y = 0; y <= this.canvas.height; y += gridSize) {
+        for (let y = 0; y <= worldH; y += gridSize) {
             this.ctx.moveTo(0, y);
-            this.ctx.lineTo(this.canvas.width, y);
+            this.ctx.lineTo(worldW, y);
         }
         this.ctx.stroke();
 
         // Glowing Intersections (Optional Polish)
-        this.ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
-        for (let x = 0; x <= this.canvas.width; x += gridSize) {
-            for (let y = 0; y <= this.canvas.height; y += gridSize) {
-                this.ctx.fillRect(x - 1, y - 1, 2, 2);
-            }
+        // Too heavy for huge world? Skip for perf?
+        // this.ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+        // ...
+
+        // Camera Logic
+        let camX = 0;
+        let camY = 0;
+
+        if (this.gameMode === 'battleroyale' || this.gameMode === 'survival') {
+            // Center on player
+            camX = this.player.x - this.canvas.width / 2;
+            camY = this.player.y - this.canvas.height / 2;
+
+            // Clamp to world
+            const worldW = this.gameMode === 'survival' ? 3000 : 2000;
+            const worldH = this.gameMode === 'survival' ? 2000 : 1500;
+            camX = Math.max(0, Math.min(camX, worldW - this.canvas.width));
+            camY = Math.max(0, Math.min(camY, worldH - this.canvas.height));
+
+            this.ctx.translate(-camX, -camY);
         }
 
         this.level.draw(this.ctx);
@@ -1049,6 +1602,66 @@ export class Game {
         }
 
         this.ctx.restore();
+
+        // Minimap (After restore, screen space)
+        if (this.gameMode === 'battleroyale' || this.gameMode === 'survival') {
+            this.drawMinimap();
+        }
+    }
+
+    drawMinimap() {
+        // Settings
+        const mapW = 200;
+        const mapH = 133; // 1200x800 aspect
+        const margin = 10;
+        const x = this.canvas.width - mapW - margin;
+        const y = this.canvas.height - mapH - margin;
+
+        const worldW = this.gameMode === 'survival' ? 3000 : 2000;
+        const worldH = this.gameMode === 'survival' ? 2000 : 1500;
+        const scale = mapW / worldW;
+
+        this.ctx.save();
+        this.ctx.translate(x, y);
+
+        // BG
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        this.ctx.fillRect(0, 0, mapW, mapH);
+        this.ctx.strokeStyle = '#fff';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(0, 0, mapW, mapH);
+
+        // Walls (Static usually, but we have random ones)
+        this.ctx.fillStyle = '#555';
+        for (const w of this.level.walls) {
+            // Don't draw bounds (too confusing)
+            if (w.w >= worldW || w.h >= worldH) continue;
+            this.ctx.fillRect(w.x * scale, w.y * scale, Math.max(1, w.w * scale), Math.max(1, w.h * scale));
+        }
+
+        // Gems
+        this.ctx.fillStyle = '#0ff';
+        for (const d of this.drops) {
+            if (!d.active) continue;
+            // Only Gems? No, drops array has gems.
+            // Gem size
+            this.ctx.fillRect(d.x * scale - 1, d.y * scale - 1, 3, 3);
+        }
+
+        // Enemies
+        this.ctx.fillStyle = '#f00';
+        for (const e of this.enemies) {
+            if (e.hp <= 0) continue;
+            this.ctx.fillRect(e.x * scale - 1.5, e.y * scale - 1.5, 3, 3);
+        }
+
+        // Player
+        if (this.player.hp > 0) {
+            this.ctx.fillStyle = '#0f0';
+            this.ctx.fillRect(this.player.x * scale - 2, this.player.y * scale - 2, 4, 4);
+        }
+
+        this.ctx.restore();
     }
 
     initHelpUI() {
@@ -1083,31 +1696,30 @@ export class Game {
         this.particles.push(new Particle(x, y, color, 0, 'text', text));
     }
 
-    applyWeaponUpgrade(role: string) {
+    applyWeaponUpgrade(role: string, target?: Tank) {
         // Additive Upgrades - No Resetting!
+        const t = target || this.player;
 
         if (role === 'sniper') {
-            this.player.bulletSpeed *= 1.3;
-            // this.player.bulletDamage *= 1.5; // Let's be careful with exponential growth
-            this.player.bulletDamage += 10;
-            this.player.fireRate *= 1.1; // Slightly slower
+            t.bulletSpeed *= 1.3;
+            t.bulletDamage += 10;
+            t.fireRate *= 1.1; // Slightly slower
         } else if (role === 'machinegun') {
-            this.player.fireRate *= 0.7; // 30% faster
-            this.player.bulletDamage *= 0.8; // Reduced damage per shot
+            t.fireRate *= 0.7; // 30% faster
+            t.bulletDamage *= 0.8; // Reduced damage per shot
         } else if (role === 'shotgun') {
-            this.player.shotSpread += 1; // Add 2 bullets (1 per side)
-            this.player.fireRate *= 1.1; // Slightly slower
+            t.shotSpread += 1; // Add 2 bullets (1 per side)
+            t.fireRate *= 1.1; // Slightly slower
         } else if (role === 'heavy') {
-            this.player.bulletDamage += 20;
-            this.player.fireRate *= 1.2; // Slower
+            t.bulletDamage += 20;
+            t.fireRate *= 1.2; // Slower
         } else if (role === 'dasher') {
-            this.player.speed *= 1.2;
+            t.speed *= 1.2;
         }
 
-        this.spawnFloatingText(this.player.x, this.player.y - 60, `UPGRADE!`, '#ff0');
+        this.spawnFloatingText(t.x, t.y - 60, `UPGRADE!`, '#ff0');
 
         // Visuals: just update role if it's new, but don't reset
-        // Maybe keep current role visually unless we want to reflect the latest upgrade
-        this.player.role = role as any;
+        t.role = role as any;
     }
 }
