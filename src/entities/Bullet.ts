@@ -12,6 +12,8 @@ export class Bullet extends Entity {
     owner: Entity;
     color: string;
     damage: number;
+    hitList: any[] = []; // Avoid multi-hit
+    penetration: number = 0;
 
     // Trail
     trail: { x: number, y: number }[] = [];
@@ -19,13 +21,15 @@ export class Bullet extends Entity {
 
     homingStrength: number = 0;
 
-    constructor(x: number, y: number, angle: number, owner: Entity, color: string, speed: number = 200, damage: number = 1) {
+    constructor(x: number, y: number, angle: number, owner: Entity, color: string, speed: number = 200, damage: number = 1, penetration: number = 0) {
         super(x, y);
         this.owner = owner;
         this.color = color;
         this.speed = speed;
         this.damage = damage;
         this.velocity = new Vector2(Math.cos(angle), Math.sin(angle)).scale(this.speed);
+        this.penetration = penetration;
+
 
         // Auto-scale radius for bosses
         if (owner && (owner as any).role === 'boss') {

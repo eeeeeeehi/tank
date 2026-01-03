@@ -29,6 +29,7 @@ export class Tank extends Entity {
     // Upgrade Stats
     bulletRicochet: number = 0;
     bulletHoming: number = 0; // Strength
+    bulletPenetrate: number = 0; // NEW: Penetration Power
     vampire: boolean = false;
     drain: number = 0; // % of damage dealt returned as HP
 
@@ -254,6 +255,9 @@ export class Tank extends Entity {
             let minGemDist = 200; // Look for gems within range
             for (const d of drops) {
                 if (!d.active) continue;
+                // Ignore XP gems (Survival Mode) - Only collect Power Gems (BR)
+                if ((d as any).type === 'xp') continue;
+
                 const dist = Math.sqrt((d.x - this.x) ** 2 + (d.y - this.y) ** 2);
                 if (dist < minGemDist) {
                     minGemDist = dist;
@@ -268,8 +272,7 @@ export class Tank extends Entity {
 
             if (gemTarget) {
                 // Move towards Gem
-                const angle = Math.atan2(gemTarget.y - this.y, gemTarget.x - this.x);
-                // Quantize direction? or just move forward with rotation
+                // Tank AI moves by 'forward' and 'rotate'.
                 // Tank AI moves by 'forward' and 'rotate'.
                 // We need to rotate towards it.
                 // We'll set rotation target and move forward.
@@ -482,7 +485,7 @@ export class Tank extends Entity {
             const bx = this.x + Math.cos(angle) * 20;
             const by = this.y + Math.sin(angle) * 20;
 
-            const bullet = new Bullet(bx, by, angle, this, bColor, this.bulletSpeed, this.bulletDamage);
+            const bullet = new Bullet(bx, by, angle, this, bColor, this.bulletSpeed, this.bulletDamage, this.bulletPenetrate);
             bullet.maxBounces = 1 + this.bulletRicochet;
             bullet.homingStrength = this.bulletHoming;
 

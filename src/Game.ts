@@ -98,6 +98,8 @@ export class Game {
 
         this.level = new Level();
         this.player = new Tank(100, 300, true);
+        this.loadRanking();
+        this.loadSurvivalRanking();
         this.initLevel(); // Initial setup
         this.updateHUD(); // Initial HUD
         this.initHelpUI();
@@ -146,7 +148,6 @@ export class Game {
         // Keep all scores for "Your Rank is X" logic? 
         // Or trimming? User implies showing rank even if low.
         // Let's keep Top 100 to prevent infinite growth, effectively "Not Ranked" if < 100.
-        // Let's keep Top 100 to prevent infinite growth, effectively "Not Ranked" if < 100.
         if (this.highScores.length > 100) {
             this.highScores = this.highScores.slice(0, 100);
         }
@@ -156,6 +157,40 @@ export class Game {
         }
     }
 
+    // SURVIVAL RANKING
+    survivalHighScores: { time: number, level: number, date: number }[] = [];
+    lastSurvivalRank: number = -1;
+
+    loadSurvivalRanking() {
+        const saved = localStorage.getItem('tank_ranking_survival');
+        if (saved) {
+            try {
+                this.survivalHighScores = JSON.parse(saved);
+                if (!Array.isArray(this.survivalHighScores)) this.survivalHighScores = [];
+            } catch (e) {
+                this.survivalHighScores = [];
+            }
+        }
+    }
+
+    saveSurvivalRanking() {
+        if (this.gameMode !== 'survival') return;
+
+        this.currentScoreDate = Date.now();
+        // Save Time (seconds) and Level
+        this.survivalHighScores.push({ time: this.survivalTime, level: this.playerLevel, date: this.currentScoreDate });
+
+        // Sort: Longest Time first
+        this.survivalHighScores.sort((a, b) => b.time - a.time);
+
+        // Find Rank
+        this.lastSurvivalRank = this.survivalHighScores.findIndex(s => s.date === this.currentScoreDate);
+
+        if (this.survivalHighScores.length > 100) {
+            this.survivalHighScores = this.survivalHighScores.slice(0, 100);
+        }
+        localStorage.setItem('tank_ranking_survival', JSON.stringify(this.survivalHighScores));
+    }
 
 
     // Roulette Props
@@ -322,6 +357,16 @@ export class Game {
     }
 
     update(dt: number) {
+        // Global Time Updates
+        if (this.gameMode === 'survival' && this.gameState === 'playing') {
+            this.survivalTime += dt;
+            this.survivalBossTimer += dt;
+
+            // Force HUD update for timer
+            this.updateHUD();
+        }
+
+        // Input Handling
         this.input.update(); // Poll Gamepads
 
         if (this.countdownTimer > 0) {
@@ -439,7 +484,13 @@ export class Game {
                     for (let j = this.enemies.length - 1; j >= 0; j--) {
                         const enemy = this.enemies[j];
                         if (b.owner !== enemy && this.checkBulletTankCollision(b, enemy)) {
-                            b.active = false;
+                            // Demo mode penetration? Just kill.
+                            if (b.penetration > 0) {
+                                b.penetration--;
+                            } else {
+                                b.active = false;
+                            }
+
                             const dead = enemy.takeDamage(b.damage);
                             if (dead) {
                                 this.spawnExplosion(enemy.x, enemy.y, enemy.color, 40, true);
@@ -587,11 +638,8 @@ export class Game {
             return;
         }
 
-        // Survival Mode Logic
+        // Survival Mode Spawning Logic
         if (this.gameMode === 'survival' && this.gameState === 'playing') {
-            this.survivalTime += dt;
-            this.survivalBossTimer += dt;
-
             // Boss Every 1 minute (60s)
             if (this.survivalBossTimer >= 60) {
                 this.survivalBossTimer = 0;
@@ -601,7 +649,6 @@ export class Game {
 
             // Infinite Enemy Spawning
             // Horde Mode: Start fast (1.0s), ramp to swarm (0.05s) over 3 mins (180s)
-            // Even Faster
             const spawnRate = Math.max(0.05, 0.5 - (this.survivalTime / 180) * 0.45);
 
             if (Math.random() < dt / spawnRate) {
@@ -695,14 +742,20 @@ export class Game {
 
                 if (dead) {
                     if (this.gameMode === 'stage') this.saveRanking();
+                    if (this.gameMode === 'survival') this.saveSurvivalRanking(); // Save Survival Score
                     this.gameState = 'lose';
                     this.updateUI();
                 } else {
                     // Hit Stun / Invincibility
-                    this.player.invincibleTimer = 1.0;
+                    // In Survival, make it very short so you can get swarmed
+                    if (this.gameMode === 'survival') {
+                        this.player.invincibleTimer = 0.1;
+                    } else {
+                        this.player.invincibleTimer = 1.0;
+                    }
                 }
-                break;
             }
+
 
             // Check Enemies
             for (let j = this.enemies.length - 1; j >= 0; j--) {
@@ -710,11 +763,17 @@ export class Game {
                 const canHit = b.owner !== enemy && (this.gameMode === 'battleroyale' || b.owner === this.player);
 
                 if (canHit && this.checkBulletTankCollision(b, enemy)) {
-                    b.active = false;
+                    // Penetration Logic
+                    if (b.penetration > 0) {
+                        b.penetration--;
+                        b.hitList.push(enemy);
+                    } else {
+                        b.active = false;
+                    }
+
                     this.soundManager.playExplosion();
 
                     // Damage Enemy
-                    // this.spawnFloatingText(enemy.x, enemy.y - 20, `-${b.damage}`, '#fff'); // Removed as per user request (Use Gauge)
                     const dead = enemy.takeDamage(b.damage);
 
                     // Drain
@@ -953,10 +1012,10 @@ export class Game {
         let boss: Tank;
 
         if (type === 'tank') {
-            boss = new Tank(p.x, p.y, false, '#500', 100, 30, hp * 1.5, 'heavy', 3.0, 'heavy');
+            boss = new Tank(p.x, p.y, false, '#500', 100, 30, hp * 1.5, 'normal', 3.0, 'heavy');
             boss.width = 100; boss.height = 100;
         } else if (type === 'speed') {
-            boss = new Tank(p.x, p.y, false, '#90f', 300, 15, hp * 0.8, 'machinegun', 1.0, 'dasher');
+            boss = new Tank(p.x, p.y, false, '#90f', 300, 15, hp * 0.8, 'normal', 1.0, 'dasher');
             boss.width = 60; boss.height = 60;
         } else {
             boss = new Tank(p.x, p.y, false, '#fa0', 200, 20, hp, 'shotgun', 2.0, 'shotgun');
@@ -1148,6 +1207,12 @@ export class Game {
                 label: '小型化モジュール',
                 description: 'サイズ -20% (回避率UP)',
                 apply: (t: Tank) => { t.width *= 0.8; t.height *= 0.8; }
+            },
+            {
+                id: 'penetrate',
+                label: 'AP弾',
+                description: '貫通力 +1 (敵を貫く)',
+                apply: (t: Tank) => { t.bulletPenetrate += 1; }
             }
         ];
 
@@ -1339,6 +1404,7 @@ export class Game {
                 const m = Math.floor(this.survivalTime / 60);
                 const s = Math.floor(this.survivalTime % 60);
                 html += `<h1>GAME OVER</h1><p>生存時間: ${m}分 ${s}秒</p><p>Level: ${this.playerLevel}</p><p>[SPACE/ボタン] でリトライ</p>`;
+                this.renderRanking(ui, html); // Show Survival Ranking
             } else {
                 const stage = this.currentLevelIdx + 1;
                 html += `<h1>ゲームオーバー</h1><p>到達ステージ: ${stage}</p><p>[SPACE/ボタン] でリトライ</p>`;
@@ -1357,23 +1423,33 @@ export class Game {
         let list = '<div style="margin-top:20px; text-align:left;"><h3>到達記録</h3><ol>';
 
         // Show Top 5
-        const top5 = this.highScores.slice(0, 5);
+        // Show Top 5
+        let listItems = [];
+        if (this.gameMode === 'survival') {
+            const top5 = this.survivalHighScores.slice(0, 5);
+            listItems = top5.map((s, index) => {
+                const m = Math.floor(s.time / 60);
+                const sec = Math.floor(s.time % 60).toString().padStart(2, '0');
+                return { text: `${m}:${sec} (Lv${s.level})`, isMe: (index === this.lastSurvivalRank && s.date === this.currentScoreDate) };
+            });
+        } else {
+            const top5 = this.highScores.slice(0, 5);
+            listItems = top5.map((s, index) => {
+                return { text: `ステージ ${s.stage}`, isMe: (index === this.lastRank && s.date === this.currentScoreDate) };
+            });
+        }
 
-        top5.forEach((s, index) => {
-            const isMe = (index === this.lastRank && s.date === this.currentScoreDate);
-            const style = isMe ? 'color: #f55; font-weight: bold;' : '';
-            list += `<li style="${style}">ステージ ${s.stage}</li>`;
+        listItems.forEach((item) => {
+            const style = item.isMe ? 'color: #f55; font-weight: bold;' : '';
+            list += `<li style="${style}">${item.text}</li>`;
         });
         list += '</ol>';
 
         // If my rank is below Top 5, show it
-        if (this.lastRank >= 5) {
-            list += `<p style="color: #f55; font-weight: bold; margin-top: 5px;">あなたの順位: ${this.lastRank + 1}位</p>`;
-        } else if (this.lastRank === -1 && this.gameState === 'lose' && this.gameMode === 'stage') {
-            // Maybe game wasn't saved? Or > 100?
-            // If > 100, we don't know exact rank if we sliced.
-            // But we kept 100. If > 100, say "圏外" (Outside Rank)?
-            // For now assume top 100 covers it.
+        const myRank = this.gameMode === 'survival' ? this.lastSurvivalRank : this.lastRank;
+
+        if (myRank >= 5) {
+            list += `<p style="color: #f55; font-weight: bold; margin-top: 5px;">あなたの順位: ${myRank + 1}位</p>`;
         }
 
         list += '</div>';
@@ -1430,7 +1506,8 @@ export class Game {
             b.x > t.x - t.width / 2 &&
             b.x < t.x + t.width / 2 &&
             b.y > t.y - t.height / 2 &&
-            b.y < t.y + t.height / 2
+            b.y < t.y + t.height / 2 &&
+            !b.hitList.includes(t) // Ignore if already hit
         );
     }
 
