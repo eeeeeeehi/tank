@@ -24,12 +24,15 @@ export class Tank extends Entity {
     fireRate: number = 0.5;
     weaponType: 'normal' | 'shotgun' = 'normal';
 
-    role: 'standard' | 'sniper' | 'machinegun' | 'shotgun' | 'dasher' | 'armored' | 'heavy' = 'standard';
+    role: 'standard' | 'sniper' | 'machinegun' | 'shotgun' | 'dasher' | 'armored' | 'heavy' | 'boss' | 'normal' = 'standard';
 
     // Upgrade Stats
     bulletRicochet: number = 0;
     bulletHoming: number = 0; // Strength
     vampire: boolean = false;
+    drain: number = 0; // % of damage dealt returned as HP
+
+    weaponLevel: number = 1;
 
     constructor(
         x: number,
@@ -40,8 +43,9 @@ export class Tank extends Entity {
         bulletDamage: number = 1,
         hp: number = 1,
         weaponType: 'normal' | 'shotgun' = 'normal',
+
         fireRate: number = 0.5,
-        role: 'standard' | 'sniper' | 'machinegun' | 'shotgun' | 'dasher' | 'armored' | 'heavy' = 'standard'
+        role: 'standard' | 'sniper' | 'machinegun' | 'shotgun' | 'dasher' | 'armored' | 'heavy' | 'boss' | 'normal' = 'standard'
     ) {
         super(x, y);
         this.isPlayer = isPlayer;
@@ -56,6 +60,12 @@ export class Tank extends Entity {
 
         if (!isPlayer) {
             this.rotation = Math.PI;
+            // Nerf Enemy Fire Rate if using default
+            if (fireRate === 0.5) {
+                this.fireRate = 3.0; // Much slower default (was 1.5)
+            }
+            // Delay first shot
+            this.aiShootTimer = 1 + Math.random() * 2;
         }
     }
 
@@ -71,7 +81,7 @@ export class Tank extends Entity {
     aiAction: 'idle' | 'moveBase' | 'rotateLeft' | 'rotateRight' | 'forward' | 'backward' = 'idle';
     aiShootTimer: number = 0;
 
-    update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[], targets?: Tank[]) {
+    update(dt: number, input?: Input | null, level?: Level, bullets?: Bullet[], targets?: Tank[], obstacles?: Tank[]) {
         if (this.invincibleTimer > 0) {
             this.invincibleTimer -= dt;
         }
@@ -121,7 +131,7 @@ export class Tank extends Entity {
                 }
 
                 // Move
-                this.move(dx * this.speed * dt, dy * this.speed * dt, level);
+                this.move(dx * this.speed * dt, dy * this.speed * dt, level, obstacles);
             }
 
             // Aiming Priority: Right Stick -> Left Stick (Move) -> Mouse -> Keyboard (Move)
@@ -200,11 +210,11 @@ export class Tank extends Entity {
         }
         // AI Control
         else if (level && bullets) {
-            this.updateAI(dt, level, bullets, targets);
+            this.updateAI(dt, level, bullets, targets, obstacles);
         }
     }
 
-    updateAI(dt: number, level: Level, bullets: Bullet[], targets?: Tank[]) {
+    updateAI(dt: number, level: Level, bullets: Bullet[], targets?: Tank[], obstacles?: Tank[]) {
         this.aiTimer -= dt;
 
         // Targeting Logic (Battle Royale)
@@ -225,14 +235,35 @@ export class Tank extends Entity {
 
         if (this.aiTimer <= 0) {
             // Pick new action
-            this.aiTimer = 1 + Math.random() * 2; // 1-3 seconds
+            this.aiTimer = 0.5 + Math.random() * 1.5; // Faster reactions (0.5-2.0s)
 
             if (target) {
-                // Tactical Move if target found
+                // Distance Check
+                const dist = Math.sqrt((target.x - this.x) ** 2 + (target.y - this.y) ** 2);
+                let safeDist = 250; // Default keep away distance
+                if (this.role === 'sniper') safeDist = 450;
+                if (this.role === 'shotgun') safeDist = 150;
+                if (this.role === 'dasher') safeDist = 0; // Rush
+
                 const rand = Math.random();
-                if (rand < 0.6) this.aiAction = 'forward'; // Chase
-                else if (rand < 0.8) this.aiAction = 'rotateLeft';
-                else this.aiAction = 'rotateRight';
+
+                if (dist < safeDist) {
+                    // Too close: Retreat
+                    if (rand < 0.6) this.aiAction = 'backward';
+                    else if (rand < 0.8) this.aiAction = 'rotateLeft';
+                    else this.aiAction = 'rotateRight';
+                } else if (dist > safeDist * 1.5) {
+                    // Too far: Chase
+                    if (rand < 0.7) this.aiAction = 'forward';
+                    else if (rand < 0.9) this.aiAction = 'rotateLeft';
+                    else this.aiAction = 'rotateRight';
+                } else {
+                    // Optimal Range: Strafe / Maintain
+                    if (rand < 0.3) this.aiAction = 'forward';
+                    else if (rand < 0.6) this.aiAction = 'backward';
+                    else if (rand < 0.8) this.aiAction = 'rotateLeft';
+                    else this.aiAction = 'rotateRight';
+                }
             } else {
                 // Random Wander
                 const rand = Math.random();
@@ -274,80 +305,118 @@ export class Tank extends Entity {
         if (this.aiAction === 'forward') {
             const dx = Math.cos(this.rotation) * this.speed * dt;
             const dy = Math.sin(this.rotation) * this.speed * dt;
-            this.move(dx, dy, level);
+            this.move(dx, dy, level, obstacles);
         } else if (this.aiAction === 'backward') {
             const dx = Math.cos(this.rotation) * -this.speed * dt;
             const dy = Math.sin(this.rotation) * -this.speed * dt;
-            this.move(dx, dy, level);
+            this.move(dx, dy, level, obstacles);
         }
 
         // Shooting
         this.aiShootTimer -= dt;
         if (this.aiShootTimer <= 0) {
-            // Only shoot if roughly facing target or random chance
+            // Only shoot if facing target
             if (target) {
                 const targetRotation = Math.atan2(target.y - this.y, target.x - this.x);
                 let diff = targetRotation - this.rotation;
                 while (diff > Math.PI) diff -= Math.PI * 2;
                 while (diff <= -Math.PI) diff += Math.PI * 2;
 
-                if (Math.abs(diff) < 0.5) {
+                // Shoots only if aim is accurate (Strict ~23 degrees)
+                if (Math.abs(diff) < 0.4) {
+                    // Small Accuracy Error (+- 10 degrees)
+                    const error = (Math.random() - 0.5) * 0.35;
+                    this.rotation += error;
+
                     this.shoot(bullets);
+
+                    this.rotation -= error; // Reset rotation so they don't jitter visibly
+
                     this.aiShootTimer = this.fireRate * (1 + Math.random()); // Fire rate variance
                 } else {
-                    this.aiShootTimer = 0.2; // Check again soon
+                    this.aiShootTimer = 0.1; // Check again soon
                 }
             } else {
-                this.shoot(bullets);
-                this.aiShootTimer = 2 + Math.random() * 3;
+                // ceased random firing
+                // this.shoot(bullets);
+                // this.aiShootTimer = 2 + Math.random() * 3;
             }
         }
     }
 
-    move(dx: number, dy: number, level: Level) {
+    move(dx: number, dy: number, level: Level, obstacles?: Tank[]) {
         this.x += dx;
-        if (this.checkCollision(level)) {
+
+        let collision = this.checkCollision(level);
+        if (!collision && obstacles) collision = this.checkTankCollisions(obstacles);
+
+        if (collision) {
             this.x -= dx;
             // If AI hit wall, change action immediately
             if (!this.isPlayer) this.aiTimer = 0;
         }
 
         this.y += dy;
-        if (this.checkCollision(level)) {
+        collision = this.checkCollision(level);
+        if (!collision && obstacles) collision = this.checkTankCollisions(obstacles);
+
+        if (collision) {
             this.y -= dy;
             if (!this.isPlayer) this.aiTimer = 0;
         }
     }
 
+    checkTankCollisions(obstacles: Tank[]): boolean {
+        // Simple Circle Collision
+        const r = this.width / 2; // Approx radius
+        for (const other of obstacles) {
+            if (other === this) continue;
+            if (other.hp <= 0) continue; // Ignore dead tanks
+
+            const distSq = (this.x - other.x) ** 2 + (this.y - other.y) ** 2;
+            const minDist = r + other.width / 2;
+
+            if (distSq < minDist * minDist) return true;
+        }
+        return false;
+    }
+
+    // Modifiers
+    shotSpread: number = 0; // 0 = 1 bullet, 1 = 3 bullets, etc.
+
     shoot(bullets: Bullet[]) {
         if (this.shootTimer > 0) return;
 
-        const bx = this.x + Math.cos(this.rotation) * 20;
-        const by = this.y + Math.sin(this.rotation) * 20;
+        // Bullet Color
+        let bColor = '#f80'; // Default Enemy
 
-        // Determine bullet color
-        let bColor = '#f80';
-        if (this.isPlayer) bColor = '#ff0';
-        else if (this.weaponType === 'shotgun') bColor = '#f80';
-        else if (this.bulletDamage > 1) bColor = '#fff';
-        else if (this.bulletSpeed > 300) bColor = '#f0f';
-
-        if (this.weaponType === 'shotgun') {
-            // 3-Way Spread
-            for (let i = -1; i <= 1; i++) {
-                const angle = this.rotation + i * 0.2;
-                const sbx = this.x + Math.cos(angle) * 20;
-                const sby = this.y + Math.sin(angle) * 20;
-                const bullet = new Bullet(sbx, sby, angle, this, bColor, this.bulletSpeed, this.bulletDamage);
-                bullet.maxBounces = 1 + this.bulletRicochet;
-                bullet.homingStrength = this.bulletHoming;
-                bullets.push(bullet);
-            }
+        if (this.isPlayer) {
+            bColor = '#0f0'; // Player Always Green
         } else {
-            // Normal
-            const bullet = new Bullet(bx, by, this.rotation, this, bColor, this.bulletSpeed, this.bulletDamage);
+            // Enemy Role Colors
+            if (this.role === 'sniper') bColor = '#fff';
+            if (this.role === 'heavy') bColor = '#f0f';
+            if (this.shotSpread > 0 || this.role === 'shotgun') bColor = '#fc0';
+        }
+
+        const count = this.shotSpread; // 0 -> 1 bullet, 1 -> 3 bullets
+
+        // Spread Angle Calculation
+        // If count is high, increase max spread?
+        // Fixed spread per bullet index
+        const spreadStep = 0.15;
+
+        for (let i = -count; i <= count; i++) {
+            const angle = this.rotation + i * spreadStep;
+
+            // Offset spawn point
+            const bx = this.x + Math.cos(angle) * 20;
+            const by = this.y + Math.sin(angle) * 20;
+
+            const bullet = new Bullet(bx, by, angle, this, bColor, this.bulletSpeed, this.bulletDamage);
             bullet.maxBounces = 1 + this.bulletRicochet;
             bullet.homingStrength = this.bulletHoming;
+
             bullets.push(bullet);
         }
 
@@ -424,6 +493,19 @@ export class Tank extends Entity {
 
         ctx.fillStyle = grad;
         if (this.role === 'heavy') ctx.fillStyle = '#600'; // Dark matte red for heavy
+        if (this.role === 'boss') {
+            // Boss Styling: Dark Steel with Red Pulses
+            ctx.fillStyle = '#111';
+            // Glowing Core
+            ctx.save();
+            ctx.fillStyle = '#f00';
+            ctx.shadowColor = '#f00';
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.arc(0, 0, this.width / 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
 
         ctx.fillRect(-this.width / 2 + 4, -this.height / 2 + 4, this.width - 8, this.height - 8);
         ctx.shadowBlur = 0; // Reset shadow
@@ -516,5 +598,26 @@ export class Tank extends Entity {
         }
 
         ctx.restore();
+
+        // HP Gauge (Enemy Only)
+        if (!this.isPlayer && this.hp > 0) {
+            const barW = 40;
+            const barH = 5;
+            const yOff = -this.height / 2 - 12;
+
+            // Background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(this.x - barW / 2, this.y + yOff, barW, barH);
+
+            // Fill
+            const ratio = Math.max(0, this.hp / this.maxHp);
+            ctx.fillStyle = ratio > 0.5 ? '#0f0' : (ratio > 0.2 ? '#ff0' : '#f00');
+            ctx.fillRect(this.x - barW / 2, this.y + yOff, barW * ratio, barH);
+
+            // Border
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - barW / 2, this.y + yOff, barW, barH);
+        }
     }
 }

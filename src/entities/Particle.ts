@@ -1,4 +1,4 @@
-export type ParticleType = 'spark' | 'shockwave' | 'smoke' | 'fire' | 'debris';
+export type ParticleType = 'spark' | 'shockwave' | 'smoke' | 'fire' | 'debris' | 'text';
 
 import { Entity } from './Entity';
 import { Vector2 } from '../utils/MathUtils';
@@ -12,11 +12,13 @@ export class Particle extends Entity {
     type: ParticleType;
     rotation: number = 0;
     rotSpeed: number = 0;
+    text: string = '';
 
-    constructor(x: number, y: number, color: string, speed: number, type: ParticleType = 'spark') {
+    constructor(x: number, y: number, color: string, speed: number, type: ParticleType = 'spark', text: string = '') {
         super(x, y);
         this.color = color;
         this.type = type;
+        this.text = text;
 
         if (type === 'shockwave') {
             this.size = 5;
@@ -38,6 +40,10 @@ export class Particle extends Entity {
             this.velocity = new Vector2(Math.cos(angle), Math.sin(angle)).scale(speed * (0.8 + Math.random()));
             this.maxLife = 0.8 + Math.random() * 0.5;
             this.rotSpeed = (Math.random() - 0.5) * 10;
+        } else if (type === 'text') {
+            this.size = 20;
+            this.velocity = new Vector2(0, -50); // Float Up
+            this.maxLife = 1.0;
         } else {
             // Spark
             this.size = 2 + Math.random() * 3;
@@ -92,6 +98,14 @@ export class Particle extends Entity {
             ctx.rotate(this.rotation);
             ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
             ctx.restore();
+        } else if (this.type === 'text') {
+            ctx.fillStyle = this.color;
+            ctx.font = `bold ${this.size}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            ctx.strokeText(this.text, this.x, this.y);
+            ctx.fillText(this.text, this.x, this.y);
         } else {
             ctx.fillStyle = this.color;
             ctx.beginPath();

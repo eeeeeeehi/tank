@@ -83,24 +83,30 @@ export class Bullet extends Entity {
 
         this.bounces++;
 
-        const closestX = Math.max(wall.x, Math.min(this.x, wall.x + wall.w));
-        const closestY = Math.max(wall.y, Math.min(this.y, wall.y + wall.h));
+        // Determine which side was hit by finding the smallest overlap depth
+        // This assumes the bullet is treated effectively as a box for resolution, 
+        // which provides cleaner 90-degree reflections on AABB walls.
 
-        const diffX = this.x - closestX;
-        const diffY = this.y - closestY;
+        const overlapLeft = (this.x + this.radius) - wall.x;
+        const overlapRight = (wall.x + wall.w) - (this.x - this.radius);
+        const overlapTop = (this.y + this.radius) - wall.y;
+        const overlapBottom = (wall.y + wall.h) - (this.y - this.radius);
 
-        let normal = new Vector2(diffX, diffY).normalize();
+        const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
 
-        if (diffX === 0 && diffY === 0) {
+        if (minOverlap === overlapLeft) {
+            this.x -= overlapLeft; // Push out
             this.velocity.x *= -1;
+        } else if (minOverlap === overlapRight) {
+            this.x += overlapRight;
+            this.velocity.x *= -1;
+        } else if (minOverlap === overlapTop) {
+            this.y -= overlapTop;
             this.velocity.y *= -1;
-        } else {
-            const dot = this.velocity.dot(normal);
-            this.velocity = this.velocity.sub(normal.scale(2 * dot));
+        } else { // Bottom
+            this.y += overlapBottom;
+            this.velocity.y *= -1;
         }
-
-        this.x = closestX + normal.x * (this.radius + 1);
-        this.y = closestY + normal.y * (this.radius + 1);
     }
 
     draw(ctx: CanvasRenderingContext2D): void {

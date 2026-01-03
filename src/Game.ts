@@ -5,6 +5,8 @@ import { Bullet } from './entities/Bullet';
 import { Particle } from './entities/Particle';
 import { SoundManager } from './utils/SoundManager';
 import { checkCircleRectCollision } from './utils/MathUtils';
+import { WeaponDrop } from './entities/WeaponDrop';
+
 
 export class Game {
     canvas: HTMLCanvasElement;
@@ -18,9 +20,42 @@ export class Game {
     bullets: Bullet[] = [];
     particles: Particle[] = [];
     inputBlockTimer: number = 0;
+    drops: WeaponDrop[] = [];
+
 
     gameState: 'start' | 'playing' | 'win' | 'lose' | 'victory' = 'start';
     gameMode: 'stage' | 'battleroyale' = 'stage';
+    spawnBoss(stage: number) {
+        const p = this.getSafeSpawnPosition(60);
+        if (!p) return;
+
+        const bossCount = Math.floor(stage / 5); // 1, 2, 3...
+
+        // Boss Stats Scaling
+        // 1st Boss: 1500 HP
+        // 2nd Boss: 2500 HP
+        const bossHp = 1000 + bossCount * 500;
+
+        const boss = new Tank(p.x, p.y, false, '#333', 250, 40, bossHp, 'shotgun', 1.0, 'boss');
+        boss.width = 80;
+        boss.height = 80;
+
+        // 1st Boss: Lv2 (5-way), Others: Lv3 (7-way)
+        boss.weaponLevel = bossCount >= 2 ? 3 : 2;
+
+        // Damage Scaling
+        boss.bulletDamage = 20 + (bossCount - 1) * 5;
+
+        boss.speed = 40 + (bossCount * 5); // Slightly faster each time
+
+        this.enemies.push(boss);
+
+        // Minions Scaling
+        const minionCount = 2 + (bossCount - 1);
+        for (let i = 0; i < minionCount; i++) {
+            this.spawnEnemy(stage);
+        }
+    }
     currentLevelIdx: number = 0;
     // playerLives removed in favor of this.player.hp
     // Score removed as per request
@@ -134,9 +169,17 @@ export class Game {
         this.enemies = [];
 
         if (this.gameMode === 'stage') {
-            const count = 1 + this.currentLevelIdx;
-            for (let i = 0; i < count; i++) {
-                this.spawnEnemy(this.currentLevelIdx + 1);
+            const stageNum = this.currentLevelIdx + 1;
+            if (stageNum % 5 === 0 && stageNum > 0) {
+                // BOSS BATTLE
+                this.spawnFloatingText(this.player.x, this.player.y - 100, 'WARNING: BOSS APPROACHING!', '#f00');
+                this.spawnBoss(stageNum);
+            } else {
+                // Normal Stage
+                const count = 1 + this.currentLevelIdx;
+                for (let i = 0; i < count; i++) {
+                    this.spawnEnemy(stageNum);
+                }
             }
         }
 
@@ -144,55 +187,67 @@ export class Game {
     }
 
     spawnEnemy(difficultyLevel: number) {
+        const playerX = 100;
+        const playerY = 300;
         let ex = 0, ey = 0;
         let attempts = 0;
+        let safe = false;
+
         do {
-            ex = 100 + Math.random() * (this.canvas.width - 200);
-            ey = 100 + Math.random() * (this.canvas.height - 200);
+            ex = 50 + Math.random() * (this.canvas.width - 100);
+            ey = 50 + Math.random() * (this.canvas.height - 100);
+
+            // Check Wall Collision
+            const wallCollision = this.level.walls.some((w: any) =>
+                ex > w.x - 40 && ex < w.x + w.w + 40 &&
+                ey > w.y - 40 && ey < w.y + w.h + 40
+            );
+
+            // Check Player Distance (Avoid Spawn Camping)
+            const dist = Math.sqrt((ex - playerX) ** 2 + (ey - playerY) ** 2);
+            safe = !wallCollision && dist > 300;
+
             attempts++;
-        } while (this.level.walls.some((w: any) =>
-            ex > w.x - 40 && ex < w.x + w.w + 40 &&
-            ey > w.y - 40 && ey < w.y + w.h + 40
-        ) && attempts < 20);
+        } while (!safe && attempts < 50);
 
         // Random Enemy Type
         const rand = Math.random();
         let enemy: Tank;
 
         if (this.gameMode === 'battleroyale') {
-            // Random mix for BR
-            if (rand < 0.1) enemy = new Tank(ex, ey, false, '#ccc', 200, 1, 3, 'normal', 1.0, 'armored');
-            else if (rand < 0.2) enemy = new Tank(ex, ey, false, '#f80', 200, 1, 1, 'shotgun', 1.5, 'shotgun');
-            else if (rand < 0.3) enemy = new Tank(ex, ey, false, '#ff0', 250, 1, 1, 'normal', 0.2, 'machinegun');
-            else if (rand < 0.4) enemy = new Tank(ex, ey, false, '#0ff', 500, 1, 1, 'normal', 2.0, 'sniper');
-            else if (rand < 0.5) enemy = new Tank(ex, ey, false, '#800', 200, 2, 1, 'normal', 1.0, 'heavy');
-            else if (rand < 0.6) enemy = new Tank(ex, ey, false, '#a0f', 400, 1, 1, 'normal', 0.5, 'dasher');
-            else enemy = new Tank(ex, ey, false);
+            // Random mix for BR - Nerfed Damage & HP & Fire Rate
+            if (rand < 0.1) enemy = new Tank(ex, ey, false, '#ccc', 200, 5, 30, 'normal', 3.0, 'armored');
+            else if (rand < 0.2) enemy = new Tank(ex, ey, false, '#f80', 200, 5, 15, 'shotgun', 3.0, 'shotgun');
+            else if (rand < 0.3) enemy = new Tank(ex, ey, false, '#ff0', 250, 2, 15, 'normal', 1.0, 'machinegun');
+            else if (rand < 0.4) enemy = new Tank(ex, ey, false, '#0ff', 400, 10, 15, 'normal', 4.0, 'sniper');
+            else if (rand < 0.5) enemy = new Tank(ex, ey, false, '#800', 150, 10, 25, 'normal', 3.0, 'heavy');
+            else if (rand < 0.6) enemy = new Tank(ex, ey, false, '#a0f', 300, 5, 15, 'normal', 2.0, 'dasher');
+            else enemy = new Tank(ex, ey, false, undefined, 150, 5, 15); // Default Weak
         } else {
             // Stage Progression Logic
             if (difficultyLevel >= 5 && rand < 0.15) {
-                // Armored (Silver): 3 HP, Slow, Normal Gun
-                enemy = new Tank(ex, ey, false, '#ccc', 200, 1, 3, 'normal', 1.0, 'armored');
-                enemy.speed = 60; // Slow
+                // Armored (Silver): 30 HP (2 hits), Very Slow
+                enemy = new Tank(ex, ey, false, '#ccc', 150, 5, 30, 'normal', 3.0, 'armored');
+                enemy.speed = 50;
             } else if (difficultyLevel >= 4 && rand < 0.3) {
-                // Shotgun (Orange): 1 HP, Spread
-                enemy = new Tank(ex, ey, false, '#f80', 200, 1, 1, 'shotgun', 1.5, 'shotgun');
+                // Shotgun (Orange): 15 HP (1 hit), Slow Fire
+                enemy = new Tank(ex, ey, false, '#f80', 200, 5, 15, 'shotgun', 3.0, 'shotgun');
             } else if (difficultyLevel >= 3 && rand < 0.45) {
-                // Machine Gunner (Yellow): Fast Fire, Low Damage (1), but Rapid
-                enemy = new Tank(ex, ey, false, '#ff0', 250, 1, 1, 'normal', 0.2, 'machinegun');
+                // Machine Gunner (Yellow): 15 HP (1 hit), 1.0s cooldown
+                enemy = new Tank(ex, ey, false, '#ff0', 250, 2, 15, 'normal', 1.0, 'machinegun');
             } else if (difficultyLevel >= 2 && rand < 0.6) {
-                // Sniper (Cyan): Fast Bullet (500), Slow Reload (2s)
-                enemy = new Tank(ex, ey, false, '#0ff', 500, 1, 1, 'normal', 2.0, 'sniper');
+                // Sniper (Cyan): 15 HP (1 hit), Very Slow reload (4s)
+                enemy = new Tank(ex, ey, false, '#0ff', 400, 15, 15, 'normal', 4.0, 'sniper');
             } else if (difficultyLevel >= 2 && rand < 0.75) {
-                // Heavy (Dark Red): 2 Damage
-                enemy = new Tank(ex, ey, false, '#800', 200, 2, 1, 'normal', 1.0, 'heavy');
+                // Heavy (Dark Red): 25 HP, Slow reload (3s)
+                enemy = new Tank(ex, ey, false, '#800', 150, 10, 25, 'normal', 3.0, 'heavy');
             } else if (difficultyLevel >= 2 && rand < 0.9) {
-                // Speedster (Purple): Fast Bullet, Fast Move
-                enemy = new Tank(ex, ey, false, '#a0f', 400, 1, 1, 'normal', 0.5, 'dasher');
-                enemy.speed = 150;
+                // Speedster (Purple): 15 HP (1 hit)
+                enemy = new Tank(ex, ey, false, '#a0f', 300, 5, 15, 'normal', 2.0, 'dasher');
+                enemy.speed = 130;
             } else {
-                // Standard (Red)
-                enemy = new Tank(ex, ey, false); // Default params
+                // Standard (Red): 15 HP, Default Fire Rate (3.0s set in Tank.ts)
+                enemy = new Tank(ex, ey, false, undefined, 180, 5, 15);
             }
         }
 
@@ -211,11 +266,33 @@ export class Game {
         this.update(deltaTime);
         this.draw();
 
+        // Draw Barrels (after entities?)
+        // Let's draw inside draw() actually, wait. 
+        // draw() calls various things.
+        // It's not in draw() method here, draw() function is separate.
+        // Let's modify draw() method.
+
         requestAnimationFrame((time) => this.loop(time));
     }
 
     update(dt: number) {
         this.input.update(); // Poll Gamepads
+
+        // Update Drops
+        for (let i = this.drops.length - 1; i >= 0; i--) {
+            const drop = this.drops[i];
+            drop.update(dt);
+            if (!drop.active) {
+                this.drops.splice(i, 1);
+                continue;
+            }
+            if (this.player.hp > 0 && Math.abs(this.player.x - drop.x) < 30 && Math.abs(this.player.y - drop.y) < 30) {
+                this.applyWeaponUpgrade(drop.role);
+                this.soundManager.playShoot();
+                drop.active = false;
+                this.drops.splice(i, 1);
+            }
+        }
 
         // Toggle Help
         if (this.input.isDown('Digit0') && this.inputBlockTimer <= 0) {
@@ -250,8 +327,8 @@ export class Game {
 
             // Update Background Battle
             for (const enemy of demoTanks) {
-                // Pass all tanks as targets (FFA)
-                enemy.update(dt, null, this.level, this.bullets, demoTanks);
+                // Pass all tanks as targets (FFA) and obstacles
+                enemy.update(dt, null, this.level, this.bullets, demoTanks, demoTanks);
             }
 
             // Update Bullets
@@ -360,14 +437,13 @@ export class Game {
         // Update Player
         // Block input briefly at start to prevent accidental shots
         const playerInput = this.inputBlockTimer > 0 ? undefined : this.input;
-        this.player.update(dt, playerInput, this.level, this.bullets);
+        const allTanks = [this.player, ...this.enemies]; // All potential obstacles
+
+        this.player.update(dt, playerInput, this.level, this.bullets, undefined, allTanks);
 
         // Update Enemies
-        // In BR, they target Player AND Other Enemies.
-        const allTanks = [this.player, ...this.enemies]; // All potential targets
-
         for (const enemy of this.enemies) {
-            enemy.update(dt, null, this.level, this.bullets, this.gameMode === 'battleroyale' ? allTanks : undefined);
+            enemy.update(dt, null, this.level, this.bullets, this.gameMode === 'battleroyale' ? allTanks : [this.player], allTanks);
         }
 
         // Sound check for New Bullets
@@ -380,10 +456,13 @@ export class Game {
             const b = this.bullets[i];
             b.update(dt, this.level, allTanks);
             if (!b.active) {
-                // Bullet hit wall or expired
-                this.spawnExplosion(b.x, b.y, '#ff0', 5, false);
                 this.bullets.splice(i, 1);
             }
+        }
+
+        // Remove inactive bullets post-collision
+        for (let i = this.bullets.length - 1; i >= 0; i--) {
+            if (!this.bullets[i].active) this.bullets.splice(i, 1);
         }
 
         // Update Particles
@@ -407,6 +486,9 @@ export class Game {
                 this.triggerShake(0.5, 10);
 
                 // Player Hit Logic
+                if (this.player.invincibleTimer <= 0) {
+                    this.spawnFloatingText(this.player.x, this.player.y - 20, `-${b.damage}`, '#f00');
+                }
                 const dead = this.player.takeDamage(b.damage);
                 this.updateHUD();
 
@@ -415,17 +497,8 @@ export class Game {
                     this.gameState = 'lose';
                     this.updateUI();
                 } else {
-                    if (this.gameMode === 'battleroyale') {
-                        // BR is 1 HP, so dead anyway usually, but just in case
-                        this.gameState = 'lose';
-                        this.updateUI();
-                    } else {
-                        // Respawn
-                        this.player.x = 100;
-                        this.player.y = 300;
-                        this.player.rotation = 0;
-                        this.player.invincibleTimer = 1.5; // Invincible on respawn
-                    }
+                    // Hit Stun / Invincibility
+                    this.player.invincibleTimer = 1.0;
                 }
                 break;
             }
@@ -440,18 +513,24 @@ export class Game {
                     this.soundManager.playExplosion();
 
                     // Damage Enemy
+                    // this.spawnFloatingText(enemy.x, enemy.y - 20, `-${b.damage}`, '#fff'); // Removed as per user request (Use Gauge)
                     const dead = enemy.takeDamage(b.damage);
+
+                    // Drain
+                    const owner = b.owner as Tank;
+                    if (owner && owner.drain > 0 && owner.hp > 0 && owner.hp < owner.maxHp) {
+                        const amount = Math.min(owner.maxHp - owner.hp, b.damage * owner.drain);
+                        if (amount > 0.01) {
+                            owner.hp += amount;
+                            this.spawnFloatingText(owner.x, owner.y - 30, `+${amount.toFixed(1)}`, '#0f0');
+                        }
+                    }
 
                     if (dead) {
                         this.spawnExplosion(enemy.x, enemy.y, enemy.color, 50, true);
                         this.triggerShake(0.3, 5);
 
-                        // Vampire Effect
-                        const owner = b.owner as Tank;
-                        if (owner && owner.vampire && owner.hp < owner.maxHp && Math.random() < 0.1) {
-                            owner.hp++;
-                            // Effect?
-                        }
+                        // Drops removed as per request (Moved to upgrades)
 
                         this.enemies.splice(j, 1);
 
@@ -486,13 +565,16 @@ export class Game {
     }
 
     updateHUD() {
-        const hudLives = document.getElementById('hud-lives');
+        const hudHpBar = document.getElementById('hud-hp-bar');
         const hudStage = document.getElementById('hud-stage');
 
-        if (hudLives) {
-            const hearts = '❤'.repeat(Math.max(0, this.player.hp));
-            hudLives.innerText = `ライフ: ${hearts}`;
-            hudLives.style.color = this.player.hp <= 1 ? '#f55' : 'white';
+        if (hudHpBar) {
+            const pct = Math.max(0, Math.min(100, (this.player.hp / this.player.maxHp) * 100));
+            hudHpBar.style.width = `${pct}%`;
+
+            if (pct > 50) hudHpBar.style.backgroundColor = '#0f0';
+            else if (pct > 25) hudHpBar.style.backgroundColor = '#ff0';
+            else hudHpBar.style.backgroundColor = '#f00';
         }
 
         if (hudStage) {
@@ -540,17 +622,20 @@ export class Game {
     startGame(mode: 'stage' | 'battleroyale') {
         this.gameMode = mode;
         this.gameState = 'playing';
+        this.drops = [];
+        this.player.drain = 0.05;
 
         // Reset Player Traits (Clear Upgrades)
-        this.player = new Tank(0, 0, true);
+        // x, y, isPlayer, color, bulletSpeed, bulletDamage, hp
+        this.player = new Tank(0, 0, true, undefined, 200, 20, 100);
         this.acquiredSkills = [];
 
         if (mode === 'battleroyale') {
             this.canvas.width = 1200;
             this.canvas.height = 800;
 
-            this.player.maxHp = 1; // HARDCORE
-            this.player.hp = 1;
+            this.player.maxHp = 20; // Hardcore but scaled
+            this.player.hp = 20;
             this.player.invincibleTimer = 1.5;
 
             this.currentLevelIdx = 0;
@@ -575,10 +660,8 @@ export class Game {
             }
             this.playerIndicatorTimer = 3.0;
         } else {
-            this.player.maxHp = 3; // Standard HP (was 5 in previous playerLives, let's keep it challenging or 5?)
-            // If user expects 5, set 5. Default Tank is 3.
-            this.player.maxHp = 5;
-            this.player.hp = 5;
+            this.player.maxHp = 100; // Scaled HP
+            this.player.hp = 100;
             this.player.invincibleTimer = 1.5;
 
             this.currentLevelIdx = 0;
@@ -613,12 +696,6 @@ export class Game {
     generateUpgrades() {
         const potentialUpgrades = [
             {
-                id: 'speed',
-                label: 'エンジン強化',
-                description: '移動速度 +15%',
-                apply: (t: Tank) => { t.speed *= 1.15; }
-            },
-            {
                 id: 'firerate',
                 label: 'クイックリロード',
                 description: '連射速度 +15%',
@@ -640,15 +717,22 @@ export class Game {
 
         // Removed HP Upgrade as requested
 
-        // Add Shotgun option if player doesn't have it yet
-        if (this.player.weaponType !== 'shotgun') {
+        // Weapon Options (Buffs)
+        const weaponRoles = [
+            { id: 'shotgun', label: '拡散弾モジュール', desc: '発射数 +2', role: 'shotgun' },
+            { id: 'sniper', label: '精密射撃モジュール', desc: '弾速UP・威力UP', role: 'sniper' },
+            { id: 'machinegun', label: 'ラピッドファイア', desc: '連射速度UP・威力微減', role: 'machinegun' },
+            { id: 'heavy', label: '重砲身モジュール', desc: '威力大幅UP・連射ダウン', role: 'heavy' }
+        ];
+
+        weaponRoles.forEach(w => {
             potentialUpgrades.push({
-                id: 'shotgun',
-                label: '拡散弾モジュール',
-                description: '3方向ショットガンに変更',
-                apply: (t: Tank) => { t.weaponType = 'shotgun'; }
+                id: w.id,
+                label: w.label,
+                description: w.desc,
+                apply: () => this.applyWeaponUpgrade(w.role)
             });
-        }
+        });
 
         // New Upgrades
         potentialUpgrades.push({
@@ -658,12 +742,12 @@ export class Game {
             apply: (t: Tank) => { t.bulletRicochet++; }
         });
 
-        if (!this.player.vampire) {
+        if (this.player.drain < 0.1) { // Cap at some point? Or prevent dupes
             potentialUpgrades.push({
                 id: 'vampire',
                 label: 'ドレイン装甲',
-                description: '敵撃破時に10%で回復',
-                apply: (t: Tank) => { t.vampire = true; }
+                description: '与ダメージの5%を回復',
+                apply: (t: Tank) => { t.drain += 0.05; }
             });
         }
 
@@ -922,6 +1006,10 @@ export class Game {
             if (p.type !== 'shockwave') p.draw(this.ctx);
         }
 
+        for (const drop of this.drops) {
+            drop.draw(this.ctx);
+        }
+
         if (this.countdownTimer > 0) {
             this.ctx.save();
             this.ctx.fillStyle = 'white';
@@ -964,5 +1052,37 @@ export class Game {
         if (this.helpUI) {
             this.helpUI.style.display = this.helpUI.style.display === 'none' ? 'block' : 'none';
         }
+    }
+
+    spawnFloatingText(x: number, y: number, text: string, color: string) {
+        this.particles.push(new Particle(x, y, color, 0, 'text', text));
+    }
+
+    applyWeaponUpgrade(role: string) {
+        // Additive Upgrades - No Resetting!
+
+        if (role === 'sniper') {
+            this.player.bulletSpeed *= 1.3;
+            // this.player.bulletDamage *= 1.5; // Let's be careful with exponential growth
+            this.player.bulletDamage += 10;
+            this.player.fireRate *= 1.1; // Slightly slower
+        } else if (role === 'machinegun') {
+            this.player.fireRate *= 0.7; // 30% faster
+            this.player.bulletDamage *= 0.8; // Reduced damage per shot
+        } else if (role === 'shotgun') {
+            this.player.shotSpread += 1; // Add 2 bullets (1 per side)
+            this.player.fireRate *= 1.1; // Slightly slower
+        } else if (role === 'heavy') {
+            this.player.bulletDamage += 20;
+            this.player.fireRate *= 1.2; // Slower
+        } else if (role === 'dasher') {
+            this.player.speed *= 1.2;
+        }
+
+        this.spawnFloatingText(this.player.x, this.player.y - 60, `UPGRADE!`, '#ff0');
+
+        // Visuals: just update role if it's new, but don't reset
+        // Maybe keep current role visually unless we want to reflect the latest upgrade
+        this.player.role = role as any;
     }
 }
